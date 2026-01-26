@@ -1,2 +1,7 @@
+# zig
 .zig-cache/
 zig-out/
+
+# editors
+## intellij
+.idea/
