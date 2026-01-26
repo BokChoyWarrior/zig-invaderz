@@ -1,27 +1,29 @@
-const std = @import("std");
+// const std = @import("std");
 const zig_invaders = @import("zig_invaders");
+const rl = @import("raylib");
 
 pub fn main() !void {
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try zig_invaders.bufferedPrint();
-}
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+    // init window
+    const screenWidth = 800;
+    const screenHeight = 600;
 
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    rl.initWindow(screenWidth, screenHeight, "Zig Invaderz");
+    defer rl.closeWindow();
+    rl.setTargetFPS(60);
+
+    // window loop
+    while (!rl.windowShouldClose()) {
+        rl.beginDrawing();
+        rl.clearBackground(rl.Color.black);
+
+        const splashFontSize = screenHeight / 10;
+        const splashText = "Zig Invaderz";
+        const splashTextWidth = rl.measureText(splashText,  splashFontSize);
+        const splashPosX = screenWidth / 2 - @divFloor(splashTextWidth, 2);
+        const splashPosY = screenHeight / 2 - splashFontSize / 2;
+        rl.drawText(splashText, splashPosX, splashPosY, splashFontSize, rl.Color.green);
+
+        rl.endDrawing();
+    }
 }
