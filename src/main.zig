@@ -1,6 +1,7 @@
 const std = @import("std");
 const zig_invaders = @import("zig_invaders");
 const rl = @import("raylib");
+const Allocator = std.mem.Allocator;
 
 const Rect = struct {
     x: f32,
@@ -57,19 +58,22 @@ const PlayerConfig = struct {
 const BulletConfig = struct {
     width: f32,
     height: f32,
+    speed: f32,
 
-    pub fn init(width: f32, height: f32) @This() {
-        return .{ .width = width, .height = height };
+    pub fn init(width: f32, height: f32, speed: f32) @This() {
+        return .{ .width = width, .height = height, .speed = speed, };
     }
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar = 1.0 / 100.0;
+        const defaultScalar = 1.0 / 500.0;
         return .{
             .width = screenWidth * defaultScalar,
             .height = screenWidth * defaultScalar * 2.0,
+            .speed = screenWidth * defaultScalar * 10.0
         };
     }
 };
+
 const ShieldConfig = struct {
     width: f32,
     height: f32,
@@ -126,18 +130,17 @@ const GameConfig = struct {
 const Player = struct {
     width: f32,
     height: f32,
-    posX: f32,
-    posY: f32,
+    pos_x: f32,
+    pos_y: f32,
     speed: f32,
+    game_state_p: *GameState,
 
-    pub fn fromPlayerConfig(playerConfig: PlayerConfig) @This() {
-        return .{
-            .width = playerConfig.width,
-            .height = playerConfig.height,
-            .posX = playerConfig.startX,
-            .posY = playerConfig.startY,
-            .speed = playerConfig.speed,
-        };
+    pub fn initStateless(playerConfig: PlayerConfig) @This() {
+        return .{ .width = playerConfig.width, .height = playerConfig.height, .pos_x = playerConfig.startX, .pos_y = playerConfig.startY, .speed = playerConfig.speed, .game_state_p = undefined, };
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.*.game_state_p = game_state_p;
     }
 
     pub fn draw(self: @This()) void {
@@ -148,70 +151,160 @@ const Player = struct {
         return Rect{
             .height = self.height,
             .width = self.width,
-            .x = self.posX,
-            .y = self.posY,
+            .x = self.pos_x,
+            .y = self.pos_y,
         };
     }
 
-    pub fn update(self: *@This(), gameConfig: GameConfig) void {
+    pub fn update(self: *@This()) void {
+        // movement
         if (rl.isKeyDown(rl.KeyboardKey.left)) {
-            self.posX -= self.speed;
+            self.pos_x -= self.speed;
         }
         if (rl.isKeyDown(rl.KeyboardKey.right)) {
-            self.posX += self.speed;
+            self.pos_x += self.speed;
         }
-        self.posX = std.math.clamp(self.posX, 0, @as(f32, @floatFromInt(gameConfig.screenWidth)) - self.width);
+        self.pos_x = std.math.clamp(self.pos_x, 0, @as(f32, @floatFromInt(self.game_state_p.*.game_config.screenWidth)) - self.width);
+
+        // shooting
+        // TODO: Check if minimum time has passed since last shot
+    }
+};
+
+const BulletPool = struct {
+    bullets: []Bullet,
+    allocator: Allocator,
+    game_state_p: *GameState,
+
+    pub fn initStateless(allocator: Allocator, bullet_config: BulletConfig, max_bullets: u8) !@This() {
+        const bullets = try allocator.alloc(Bullet, max_bullets);
+        errdefer allocator.free(bullets);
+
+        for (bullets) |*bullet| {
+            bullet.* = Bullet.initStateless(bullet_config);
+        }
+        return .{
+            .bullets = bullets,
+            .allocator = allocator,
+            .game_state_p= undefined,
+        };
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.*.game_state_p = game_state_p;
+        for (self.*.bullets) |*bullet| {
+            bullet.attachGameState(game_state_p);
+        }
+    }
+
+    pub fn draw(self: *@This()) void {
+        for (self.*.bullets) |*bullet| {
+            bullet.draw();
+        }
+    }
+
+    pub fn update(self: *@This()) void {
+        for (self.bullets) |*bullet| {
+            bullet.*.update();
+        }
+        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
+            // loop through bullets and find one to fire
+            const player = self.game_state_p.player_p.*;
+            for (self.bullets) |*bullet| {
+                if (!bullet.is_active) {
+                    // middle of player X and top of player y
+                    bullet.pos_x = player.pos_x + (bullet.width / 2.0) - (bullet.width / 2.0);
+                    bullet.pos_y = player.pos_y - bullet.height;
+                    bullet.is_active = true;
+                    break;
+                }
+            }
+        }
+    }
+};
+
+const Bullet = struct {
+    pos_x: f32,
+    pos_y: f32,
+    width: f32,
+    height: f32,
+    speed: f32,
+    is_active: bool,
+    game_state_p: *GameState,
+
+    pub fn initStateless(bullet_config: BulletConfig) @This() {
+        return .{
+            .pos_x = 0,
+            .pos_y = 0,
+            .width = bullet_config.width,
+            .height = bullet_config.height,
+            .speed = bullet_config.speed,
+            .is_active = false,
+            .game_state_p = undefined,
+        };
+    }
+
+    pub fn draw(self: @This()) void {
+        if (self.is_active) {
+            rl.drawRectangle(
+                @intFromFloat(self.pos_x),
+                @intFromFloat(self.pos_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                rl.Color.red,
+            );
+        }
+    }
+
+    pub fn update(self: *@This()) void {
+        if (self.is_active) {
+            self.*.pos_y -= self.speed;
+        }
+        if (self.pos_y < 0) {
+            self.is_active = false;
+        }
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.*.game_state_p = game_state_p;
     }
 };
 
 const GameState = struct {
-    gameConfig: GameConfig,
-    isStartMenu: bool,
-    player: Player,
+    game_config: GameConfig,
+    // entities needing access to game_state
+    player_p: *Player,
+    bullet_pool_p: *BulletPool,
+    // TODO:
+    // shields
+    // invaders
 
-    pub fn init(gameConfig: GameConfig) @This() {
+    pub fn init(game_config: GameConfig, player_p: *Player, bullet_pool_p: *BulletPool) @This() {
         return .{
-            .gameConfig = gameConfig,
-            .isStartMenu = true,
-            .player = gameConfig.playerConfig.toGame(),
+            .game_config = game_config,
+            .player_p = player_p,
+            .bullet_pool_p = bullet_pool_p,
         };
     }
 
-    pub fn update(self: *@This()) void {
-        if (!self.isStartMenu) {
-            self.player.update(self.gameConfig);
-        }
+    pub fn update(self: @This()) void {
+        self.player_p.*.update();
+        self.bullet_pool_p.*.update();
     }
 
     pub fn draw(self: @This()) void {
-        if (!self.isStartMenu) {
-            self.player.draw();
-        }
+        self.player_p.*.draw();
+        self.bullet_pool_p.*.draw();
     }
 };
 
-const ActiveScreenTag = enum {
-    start_menu,
-    // game_loop,
-};
-
-const ActiveScreen = union(ActiveScreenTag) {
+const ActiveScreen = union(enum) {
     start_menu: StartMenu,
-    // game_loop: GameState,
-
-    pub fn init(startMenu: StartMenu) @This() {
-        return .{
-            .start_menu = startMenu,
-        };
-    }
-
-    pub fn update(self: *@This()) void {
-        std.debug.print("mousedOver?: {}\n", .{self.start_menu.isMouseOnStartRect()});
-    }
+    game_loop: GameState,
 
     pub fn draw(self: @This()) void {
         switch (self) {
-            .start_menu => |value| value.draw(),
+            .start_menu => |menu| menu.draw(),
         }
     }
 };
@@ -254,7 +347,7 @@ const StartMenu = struct {
             .startText = startText,
             .startTextFontSize = @intFromFloat(startFontSize),
             .startTextWidth = startTextWidth,
-            .startTextX = @intFromFloat(@as(f32, @floatFromInt(gameConfig.screenWidth)) / 2.0 -  (@as(f32, @floatFromInt(startTextWidth)) / 2.0)),
+            .startTextX = @intFromFloat(@as(f32, @floatFromInt(gameConfig.screenWidth)) / 2.0 - (@as(f32, @floatFromInt(startTextWidth)) / 2.0)),
             .startTextY = @intFromFloat(((@as(f32, @floatFromInt(gameConfig.screenHeight))) * startYPosition) - (startFontSize / 2.0)),
             .startTextRect = rl.Rectangle{
                 .width = startRectWidth,
@@ -286,20 +379,35 @@ const StartMenu = struct {
 
     pub fn update(self: *@This()) void {
         if (self.isMouseOnStartRect() and rl.isMouseButtonPressed(rl.MouseButton.left)) {
+            std.debug.print("start pressed in update function", .{});
             self.startPressed = true;
         }
     }
 };
 
 pub fn main() !void {
+    var dba = std.heap.DebugAllocator(.{}){};
+    // var gpa = std.heap.GeneralPurposeAllocator.init(.{});
+    const allocator = dba.allocator();
 
     // init window
     const screenWidth = 1280;
     const screenHeight = 760;
     rl.initWindow(screenWidth, screenHeight, "Zig Invaderz");
 
-    const gameConfig = GameConfig.fromScreenDims(screenWidth, screenHeight);
-    const startMenu = StartMenu.init(gameConfig);
+    const game_config = GameConfig.fromScreenDims(screenWidth, screenHeight);
+    const startMenu = StartMenu.init(game_config);
+
+    // create bullet pool
+    var bullet_pool = try BulletPool.initStateless(allocator, game_config.bulletConfig, 10);
+    // create player
+    var player: Player = Player.initStateless(game_config.playerConfig);
+    // create game state
+    var game_state = GameState.init(game_config, &player, &bullet_pool);
+
+    // attach game state to entities requiring it
+    bullet_pool.attachGameState(&game_state);
+    player.attachGameState(&game_state);
 
     var activeScreen = ActiveScreen{ .start_menu = startMenu };
 
@@ -309,11 +417,22 @@ pub fn main() !void {
     // window loop
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
+        defer rl.endDrawing();
         rl.clearBackground(rl.Color.black);
 
-        activeScreen.update();
-        activeScreen.draw();
-
-        rl.endDrawing();
+        switch (activeScreen) {
+            .start_menu => |*menu| {
+                if (menu.startPressed) {
+                    activeScreen = ActiveScreen{ .game_loop = game_state };
+                } else {
+                    menu.update();
+                    menu.draw();
+                }
+            },
+            .game_loop => |*gameState| {
+                gameState.update();
+                gameState.draw();
+            },
+        }
     }
 }
