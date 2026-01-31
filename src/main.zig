@@ -3,6 +3,7 @@ const zig_invaders = @import("zig_invaders");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
 const Config = @import("./Config.zig"); // Import the config
+const assert = std.debug.assert;
 
 const Rect = struct {
     x: f32,
@@ -61,8 +62,10 @@ const Player = struct {
     pos_x: f32,
     pos_y: f32,
     speed: f32,
-    game_state_p: *GameState,
-    bullet_pool_p: *BulletPool,
+    // parents
+    game_state_p: ?*GameState,
+    // children
+    bullet_pool_p: ?*BulletPool,
 
     pub fn initStateless(playerConfig: Config.Player) @This() {
         return .{
@@ -71,13 +74,19 @@ const Player = struct {
             .pos_x = playerConfig.startX,
             .pos_y = playerConfig.startY,
             .speed = playerConfig.speed,
-            .game_state_p = undefined,
-            .bullet_pool_p = undefined,
+            .game_state_p = null,
+            .bullet_pool_p = null,
         };
     }
 
+    pub fn validate(self: @This()) void {
+        assert(self.bullet_pool_p != null);
+        assert(self.game_state_p != null);
+        self.bullet_pool_p.?.validate();
+    }
+
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
-        self.*.game_state_p = game_state_p;
+        self.game_state_p = game_state_p;
     }
 
     pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
@@ -105,7 +114,7 @@ const Player = struct {
         if (rl.isKeyDown(rl.KeyboardKey.right)) {
             self.pos_x += self.speed;
         }
-        self.pos_x = std.math.clamp(self.pos_x, 0, @as(f32, @floatFromInt(self.game_state_p.*.game_config.screenWidth)) - self.width);
+        self.pos_x = std.math.clamp(self.pos_x, 0, @as(f32, @floatFromInt(self.game_state_p.?.*.game_config.screenWidth)) - self.width);
 
         // shooting
         // TODO: Check if minimum time has passed since last shot
@@ -114,15 +123,17 @@ const Player = struct {
             const bullet_start_x = self.pos_x + (self.width / 2.0);
             const bullet_start_y = self.pos_y;
             const direction = Vec2.init(0.0, -1.0);
-            self.bullet_pool_p.fire_bullet(bullet_start_x, bullet_start_y, direction);
+            self.bullet_pool_p.?.fire_bullet(bullet_start_x, bullet_start_y, direction);
         }
     }
 };
 
 const BulletPool = struct {
-    bullets: []Bullet,
     allocator: Allocator,
-    game_state_p: *GameState,
+    // parents
+    game_state_p: ?*GameState,
+    // children
+    bullets: []Bullet,
 
     pub fn initStateless(allocator: Allocator, bullet_pool_config: Config.BulletPool) !@This() {
         const bullets = (try allocator.alloc(Bullet, bullet_pool_config.max_bullets));
@@ -140,8 +151,15 @@ const BulletPool = struct {
         return .{
             .bullets = bullets,
             .allocator = allocator,
-            .game_state_p = undefined,
+            .game_state_p = null,
         };
+    }
+
+    pub fn validate(self: @This()) void {
+        assert(self.game_state_p != null);
+        for (self.bullets) |*bullet| {
+            bullet.validate();
+        }
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
@@ -171,6 +189,10 @@ const BulletPool = struct {
             }
         }
     }
+
+    pub fn deinit(self: *@This()) void {
+        self.allocator.free(self.bullets);
+    }
 };
 
 const Bullet = struct {
@@ -182,7 +204,8 @@ const Bullet = struct {
     direction: Vec2,
     velocity: Vec2,
     is_active: bool,
-    game_state_p: *GameState,
+    // parents
+    game_state_p: ?*GameState,
 
     pub fn initStateless(bullet_config: Config.Bullet) @This() {
         return .{
@@ -196,6 +219,10 @@ const Bullet = struct {
             .direction = undefined,
             .velocity = undefined,
         };
+    }
+
+    pub fn validate(self: @This()) void {
+        assert(self.game_state_p != null);
     }
 
     pub fn draw(self: @This()) void {
@@ -351,9 +378,9 @@ const ShieldManager = struct {
 
 const GameState = struct {
     game_config: Config.Game,
-    // entities needing access to game_state
-    player_p: *Player,
-    bullet_pool_p: *BulletPool,
+    // entities needing access to game_state should also be added to the validate function (and if necessary implement a similar function of their own)
+    player_p: ?*Player,
+    bullet_pool_p: ?*BulletPool,
     // TODO:
     // shields
     // invaders
@@ -367,13 +394,20 @@ const GameState = struct {
     }
 
     pub fn update(self: *@This()) void {
-        self.player_p.update();
-        self.bullet_pool_p.update();
+        self.player_p.?.update();
+        self.bullet_pool_p.?.update();
     }
 
     pub fn draw(self: @This()) void {
-        self.player_p.draw();
-        self.bullet_pool_p.draw();
+        self.player_p.?.draw();
+        self.bullet_pool_p.?.draw();
+    }
+
+    pub fn validate(self: @This()) void {
+        assert(self.bullet_pool_p != null);
+        assert(self.player_p != null);
+        self.player_p.?.validate();
+        self.bullet_pool_p.?.validate();
     }
 };
 
@@ -479,15 +513,20 @@ pub fn main() !void {
 
     // create bullet pool
     var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
+    defer player_bullet_pool.deinit();
     // create player
     var player: Player = Player.initStateless(game_config.playerConfig);
     // create game state
+    // maybe we should also return the `validate` function here, to help remind the idiot behind the keyboard to actually invoke this function at some point
     var game_state = GameState.init(game_config, &player, &player_bullet_pool);
 
     // attach game state to entities requiring it
-    
+
     player_bullet_pool.attachGameState(&game_state);
     player.attachGameState(&game_state);
+    player.attach_bullet_pool(&player_bullet_pool);
+
+    game_state.validate();
 
     var activeScreen = ActiveScreen{ .start_menu = startMenu };
 
