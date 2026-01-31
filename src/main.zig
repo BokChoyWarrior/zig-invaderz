@@ -62,7 +62,7 @@ const Player = struct {
     pos_y: f32,
     speed: f32,
     game_state_p: *GameState,
-    bullet_pool_p: *BulletPool,
+    // bullet_pool_p: *BulletPool,
 
     pub fn initStateless(playerConfig: Config.Player) @This() {
         return .{
@@ -72,7 +72,7 @@ const Player = struct {
             .pos_y = playerConfig.startY,
             .speed = playerConfig.speed,
             .game_state_p = undefined,
-            .bullet_pool_p = undefined,
+            // .bullet_pool_p = undefined,
         };
     }
 
@@ -80,9 +80,9 @@ const Player = struct {
         self.*.game_state_p = game_state_p;
     }
 
-    pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
-        self.bullet_pool_p = bullet_pool_p;
-    }
+    // pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
+    //     self.bullet_pool_p = bullet_pool_p;
+    // }
 
     pub fn draw(self: @This()) void {
         self.rect().draw(rl.Color.blue);
@@ -114,57 +114,57 @@ const Player = struct {
             const bullet_start_x = self.pos_x + (self.width / 2.0);
             const bullet_start_y = self.pos_y;
             const direction = Vec2.init(0.0, -1.0);
-            self.bullet_pool_p.fire_bullet(bullet_start_x, bullet_start_y, direction);
+            self.game_state_p.fire_bullet(bullet_start_x, bullet_start_y, direction);
         }
     }
 };
 
-const BulletPool = struct {
-    bullets: []Bullet,
-    allocator: Allocator,
-    game_state_p: *GameState,
+const BulletHandler = struct {
+    // bullets: []Bullet,
+    // allocator: Allocator,
+    // game_state_p: *GameState,
 
-    pub fn initStateless(allocator: Allocator, bullet_pool_config: Config.BulletPool) !@This() {
-        const bullets = (try allocator.alloc(Bullet, bullet_pool_config.max_bullets));
+    // pub fn initStateless(allocator: Allocator, bullet_pool_config: Config.BulletPool) !@This() {
+    //     const bullets = (try allocator.alloc(Bullet, bullet_pool_config.max_bullets));
 
-        // cannot iterate over dynamically allocated array slike this:
-        for (bullets) |*bullet| {
-            bullet.* = Bullet.initStateless(bullet_pool_config.bullet_config);
-        }
+    //     // cannot iterate over dynamically allocated array slike this:
+    //     for (bullets) |*bullet| {
+    //         bullet.* = Bullet.initStateless(bullet_pool_config.bullet_config);
+    //     }
 
-        // instead we can use a loop to initialize each bullet
-        // for (0..bullets.len) |i| {
-        //     bullets[i].* = Bullet.initStateless(bullet_pool_config.bullet_config);
-        // }
+    //     // instead we can use a loop to initialize each bullet
+    //     // for (0..bullets.len) |i| {
+    //     //     bullets[i].* = Bullet.initStateless(bullet_pool_config.bullet_config);
+    //     // }
 
-        return .{
-            .bullets = bullets,
-            .allocator = allocator,
-            .game_state_p = undefined,
-        };
-    }
+    //     return .{
+    //         .bullets = bullets,
+    //         .allocator = allocator,
+    //         .game_state_p = undefined,
+    //     };
+    // }
 
-    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
-        self.game_state_p = game_state_p;
-        for (self.bullets) |*bullet| {
-            bullet.attachGameState(game_state_p);
-        }
-    }
+    // pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+    //     self.game_state_p = game_state_p;
+    //     for (self.bullets) |*bullet| {
+    //         bullet.attachGameState(game_state_p);
+    //     }
+    // }
 
-    pub fn draw(self: @This()) void {
-        for (self.bullets) |bullet| {
+    pub fn draw(bullets: []Bullet) void {
+        for (bullets) |bullet| {
             bullet.draw();
         }
     }
 
-    pub fn update(self: *@This()) void {
-        for (self.bullets) |*bullet| {
+    pub fn update(bullets: *[]Bullet) void {
+        for (bullets.*) |*bullet| {
             bullet.update();
         }
     }
 
-    pub fn fire_bullet(self: *@This(), emitter_x: f32, emitter_y: f32, direction: Vec2) void {
-        for (self.bullets) |*bullet| {
+    pub fn fire_bullet(bullets: *[]Bullet, emitter_x: f32, emitter_y: f32, direction: Vec2) void {
+        for (bullets.*) |*bullet| {
             if (!bullet.is_active) {
                 bullet.fire(emitter_x, emitter_y, direction);
                 break;
@@ -351,14 +351,14 @@ const ShieldManager = struct {
 
 const GameState = struct {
     game_config: Config.Game,
+    bullet_pool_p: *[]Bullet,
     // entities needing access to game_state
     player_p: *Player,
-    bullet_pool_p: *BulletPool,
     // TODO:
     // shields
     // invaders
 
-    pub fn init(game_config: Config.Game, player_p: *Player, bullet_pool_p: *BulletPool) @This() {
+    pub fn init(game_config: Config.Game, player_p: *Player, bullet_pool_p: *[]Bullet) @This() {
         return .{
             .game_config = game_config,
             .player_p = player_p,
@@ -368,12 +368,16 @@ const GameState = struct {
 
     pub fn update(self: *@This()) void {
         self.player_p.update();
-        self.bullet_pool_p.update();
+        BulletHandler.update(self.bullet_pool_p);
     }
 
     pub fn draw(self: @This()) void {
         self.player_p.draw();
-        self.bullet_pool_p.draw();
+        BulletHandler.draw(self.bullet_pool_p.*);
+    }
+
+    pub fn fire_bullet(self: *@This(), emitter_x: f32, emitter_y: f32, direction: Vec2) void {
+        BulletHandler.fire_bullet(self.bullet_pool_p, emitter_x, emitter_y, direction);
     }
 };
 
@@ -478,15 +482,18 @@ pub fn main() !void {
     const startMenu = StartMenu.init(game_config);
 
     // create bullet pool
-    var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
+    var player_bullet_pool = (try allocator.alloc(Bullet, game_config.playerBulletPoolConfig.max_bullets));
+    defer allocator.free(player_bullet_pool);
+    for (player_bullet_pool) |*bullet| {
+        bullet.* = Bullet.initStateless(game_config.playerBulletPoolConfig.bullet_config);
+    }
     // create player
     var player: Player = Player.initStateless(game_config.playerConfig);
     // create game state
     var game_state = GameState.init(game_config, &player, &player_bullet_pool);
 
     // attach game state to entities requiring it
-    
-    player_bullet_pool.attachGameState(&game_state);
+
     player.attachGameState(&game_state);
 
     var activeScreen = ActiveScreen{ .start_menu = startMenu };
