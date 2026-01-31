@@ -2,6 +2,7 @@ const std = @import("std");
 const zig_invaders = @import("zig_invaders");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
+const Config = @import("./Config.zig"); // Import the config
 
 const Rect = struct {
     x: f32,
@@ -21,108 +22,35 @@ const Rect = struct {
     }
 };
 
-const PlayerConfig = struct {
-    width: f32,
-    height: f32,
-    startX: f32,
-    startY: f32,
-    speed: f32,
+const Vec2 = struct {
+    x: f32,
+    y: f32,
 
-    pub fn init(width: f32, height: f32, startX: f32, startY: f32, speed: f32) @This() {
+    pub fn init(x: f32, y: f32) @This() {
         return .{
-            .width = width,
-            .height = height,
-            .startX = startX,
-            .startY = startY,
-            .speed = speed,
+            .x = x,
+            .y = y,
         };
     }
 
-    pub fn fromScreenDims(screenWidth: f32, screenHeight: f32) @This() {
-        const defaultSizeModifier = 1.0 / 50.0;
-        const width = screenWidth * defaultSizeModifier * 1 / 2;
+    pub fn scale(self: @This(), a: f32) @This() {
         return .{
-            .width = width,
-            .height = screenHeight * defaultSizeModifier,
-            .startX = (screenWidth / 2.0) + (width / 2.0),
-            .startY = screenHeight * (1.0 - defaultSizeModifier),
-            .speed = width,
+            .x = self.x * a,
+            .y = self.y * a,
         };
     }
 
-    pub fn toGame(self: @This()) Player {
-        return Player.fromPlayerConfig(self);
-    }
-};
-
-const BulletConfig = struct {
-    width: f32,
-    height: f32,
-    speed: f32,
-
-    pub fn init(width: f32, height: f32, speed: f32) @This() {
-        return .{ .width = width, .height = height, .speed = speed, };
-    }
-
-    pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar = 1.0 / 500.0;
+    pub fn normalised(self: @This()) @This() {
+        const length = @sqrt(self.x * self.x + self.y * self.y);
+        if (length > 0) {
+            return .{
+                .x = self.x / length,
+                .y = self.y / length,
+            };
+        }
         return .{
-            .width = screenWidth * defaultScalar,
-            .height = screenWidth * defaultScalar * 2.0,
-            .speed = screenWidth * defaultScalar * 10.0
-        };
-    }
-};
-
-const ShieldConfig = struct {
-    width: f32,
-    height: f32,
-    spacing: f32,
-
-    pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar = 1.0 / 10.0;
-        return .{
-            .width = screenWidth * defaultScalar,
-            .height = screenWidth * defaultScalar,
-            .spacing = screenWidth * defaultScalar,
-        };
-    }
-};
-
-const InvaderConfig = struct {
-    width: f32,
-    height: f32,
-    spacingX: f32,
-    spacingY: f32,
-
-    pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar = 1 / 30;
-        return .{
-            .width = screenWidth * defaultScalar * 2,
-            .height = screenWidth * defaultScalar,
-            .spacingX = screenWidth * defaultScalar,
-            .spacingY = screenWidth * defaultScalar,
-        };
-    }
-};
-
-const GameConfig = struct {
-    screenWidth: i32,
-    screenHeight: i32,
-    playerConfig: PlayerConfig,
-    bulletConfig: BulletConfig,
-    shieldConfig: ShieldConfig,
-    invaderConfig: InvaderConfig,
-    pub fn fromScreenDims(screenWidth: i32, screenHeight: i32) @This() {
-        const screenHeightF: f32 = @floatFromInt(screenHeight);
-        const screenWidthF: f32 = @floatFromInt(screenWidth);
-        return .{
-            .screenWidth = screenWidth,
-            .screenHeight = screenHeight,
-            .playerConfig = PlayerConfig.fromScreenDims(screenWidthF, screenHeightF),
-            .bulletConfig = BulletConfig.fromScreenDims(screenWidthF),
-            .shieldConfig = ShieldConfig.fromScreenDims(screenWidthF),
-            .invaderConfig = InvaderConfig.fromScreenDims(screenWidthF),
+            .x = 0,
+            .y = 0,
         };
     }
 };
@@ -134,13 +62,26 @@ const Player = struct {
     pos_y: f32,
     speed: f32,
     game_state_p: *GameState,
+    bullet_pool_p: *BulletPool,
 
-    pub fn initStateless(playerConfig: PlayerConfig) @This() {
-        return .{ .width = playerConfig.width, .height = playerConfig.height, .pos_x = playerConfig.startX, .pos_y = playerConfig.startY, .speed = playerConfig.speed, .game_state_p = undefined, };
+    pub fn initStateless(playerConfig: Config.Player) @This() {
+        return .{
+            .width = playerConfig.width,
+            .height = playerConfig.height,
+            .pos_x = playerConfig.startX,
+            .pos_y = playerConfig.startY,
+            .speed = playerConfig.speed,
+            .game_state_p = undefined,
+            .bullet_pool_p = undefined,
+        };
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
         self.*.game_state_p = game_state_p;
+    }
+
+    pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
+        self.bullet_pool_p = bullet_pool_p;
     }
 
     pub fn draw(self: @This()) void {
@@ -168,6 +109,13 @@ const Player = struct {
 
         // shooting
         // TODO: Check if minimum time has passed since last shot
+        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
+            // Let bullet pool know where to fire from
+            const bullet_start_x = self.pos_x + (self.width / 2.0);
+            const bullet_start_y = self.pos_y;
+            const direction = Vec2.init(0.0, -1.0);
+            self.bullet_pool_p.fire_bullet(bullet_start_x, bullet_start_y, direction);
+        }
     }
 };
 
@@ -176,48 +124,50 @@ const BulletPool = struct {
     allocator: Allocator,
     game_state_p: *GameState,
 
-    pub fn initStateless(allocator: Allocator, bullet_config: BulletConfig, max_bullets: u8) !@This() {
-        const bullets = try allocator.alloc(Bullet, max_bullets);
-        errdefer allocator.free(bullets);
+    pub fn initStateless(allocator: Allocator, bullet_pool_config: Config.BulletPool) !@This() {
+        const bullets = (try allocator.alloc(Bullet, bullet_pool_config.max_bullets));
 
+        // cannot iterate over dynamically allocated array slike this:
         for (bullets) |*bullet| {
-            bullet.* = Bullet.initStateless(bullet_config);
+            bullet.* = Bullet.initStateless(bullet_pool_config.bullet_config);
         }
+
+        // instead we can use a loop to initialize each bullet
+        // for (0..bullets.len) |i| {
+        //     bullets[i].* = Bullet.initStateless(bullet_pool_config.bullet_config);
+        // }
+
         return .{
             .bullets = bullets,
             .allocator = allocator,
-            .game_state_p= undefined,
+            .game_state_p = undefined,
         };
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
-        self.*.game_state_p = game_state_p;
-        for (self.*.bullets) |*bullet| {
+        self.game_state_p = game_state_p;
+        for (self.bullets) |*bullet| {
             bullet.attachGameState(game_state_p);
         }
     }
 
-    pub fn draw(self: *@This()) void {
-        for (self.*.bullets) |*bullet| {
+    pub fn draw(self: @This()) void {
+        for (self.bullets) |bullet| {
             bullet.draw();
         }
     }
 
     pub fn update(self: *@This()) void {
         for (self.bullets) |*bullet| {
-            bullet.*.update();
+            bullet.update();
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
-            // loop through bullets and find one to fire
-            const player = self.game_state_p.player_p.*;
-            for (self.bullets) |*bullet| {
-                if (!bullet.is_active) {
-                    // middle of player X and top of player y
-                    bullet.pos_x = player.pos_x + (bullet.width / 2.0) - (bullet.width / 2.0);
-                    bullet.pos_y = player.pos_y - bullet.height;
-                    bullet.is_active = true;
-                    break;
-                }
+    }
+
+    pub fn fire_bullet(self: *@This(), emitter_x: f32, emitter_y: f32, direction: Vec2) void {
+        for (self.bullets) |*bullet| {
+            if (!bullet.is_active) {
+                bullet.fire(emitter_x, emitter_y, direction);
+                break;
             }
         }
     }
@@ -229,10 +179,12 @@ const Bullet = struct {
     width: f32,
     height: f32,
     speed: f32,
+    direction: Vec2,
+    velocity: Vec2,
     is_active: bool,
     game_state_p: *GameState,
 
-    pub fn initStateless(bullet_config: BulletConfig) @This() {
+    pub fn initStateless(bullet_config: Config.Bullet) @This() {
         return .{
             .pos_x = 0,
             .pos_y = 0,
@@ -241,6 +193,8 @@ const Bullet = struct {
             .speed = bullet_config.speed,
             .is_active = false,
             .game_state_p = undefined,
+            .direction = undefined,
+            .velocity = undefined,
         };
     }
 
@@ -258,20 +212,145 @@ const Bullet = struct {
 
     pub fn update(self: *@This()) void {
         if (self.is_active) {
-            self.*.pos_y -= self.speed;
+            self.*.pos_x += self.velocity.x;
+            self.*.pos_y += self.velocity.y;
         }
+        // TODO: Generalise check for out of bounds
         if (self.pos_y < 0) {
             self.is_active = false;
+        }
+    }
+
+    pub fn fire(self: *@This(), emitter_x: f32, emitter_y: f32, direction: Vec2) void {
+        // correct position based on bullet dimensions
+        self.pos_x = emitter_x - (self.width / 2);
+        self.pos_y = emitter_y + (self.height / 2);
+        const unit_direction = direction.normalised();
+        self.direction = unit_direction;
+        self.velocity = unit_direction.scale(self.speed);
+        self.is_active = true;
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.game_state_p = game_state_p;
+    }
+};
+const Shield = struct {
+    pos_x: f32,
+    pos_y: f32,
+    width: f32,
+    height: f32,
+    health: u8,
+    max_health: u8,
+    game_state_p: *GameState,
+
+    pub fn initStateless(shield_config: Config.Shield, x: f32, y: f32) @This() {
+        return .{
+            .pos_x = x,
+            .pos_y = y,
+            .width = shield_config.width,
+            .height = shield_config.height,
+            .health = 3, // default health
+            .max_health = 3,
+            .game_state_p = undefined,
+        };
+    }
+
+    pub fn draw(self: @This()) void {
+        if (self.health > 0) {
+            rl.drawRectangle(
+                @intFromFloat(self.pos_x),
+                @intFromFloat(self.pos_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                rl.Color.green,
+            );
+        }
+    }
+
+    pub fn update(self: *@This()) void {
+        // TODO: Handle collision with bullets
+        if (self.*.health <= 0) {
+            std.debug.print("dead", .{});
         }
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
         self.*.game_state_p = game_state_p;
     }
+
+    pub fn isHit(self: *@This(), bullet: *Bullet) bool {
+        if (!bullet.is_active) return false;
+        const rect = Rect{
+            .x = self.pos_x,
+            .y = self.pos_y,
+            .width = self.width,
+            .height = self.height,
+        };
+        const bulletRect = Rect{
+            .x = bullet.pos_x,
+            .y = bullet.pos_y,
+            .width = bullet.width,
+            .height = bullet.height,
+        };
+        if (rect.intersects(bulletRect)) {
+            self.*.health -= 1;
+            return true;
+        }
+        return false;
+    }
+};
+
+const ShieldManager = struct {
+    shields: [3]Shield,
+    allocator: Allocator,
+    game_state_p: *GameState,
+
+    pub fn initStateless(allocator: Allocator, shield_config: Config.Shield) !@This() {
+        const shields: [3]Shield = undefined;
+        const screenWidthF: f32 = 1280.0; // assuming screen width
+        const spacingX: f32 = shield_config.spacing * 2;
+        const startX: f32 = (screenWidthF / 2.0) - (spacingX * 1.5);
+        const startY: f32 = 400.0;
+
+        for (shields, 0..) |*shield, i| {
+            shield.* = Shield.initStateless(shield_config, startX + (@as(f32, @floatFromInt(i)) * spacingX), startY);
+        }
+
+        return .{
+            .shields = shields,
+            .allocator = allocator,
+            .game_state_p = undefined,
+        };
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.game_state_p = game_state_p;
+        for (self.*.shields) |*shield| {
+            shield.attachGameState(game_state_p);
+        }
+    }
+
+    pub fn draw(self: @This()) void {
+        for (self.shields) |*shield| {
+            shield.draw();
+        }
+    }
+
+    pub fn update() void {
+        // TODO: Handle collisions with bullets
+    }
+
+    pub fn isHit(self: *@This(), bullet: *Bullet) bool {
+        for (self.*.shields) |*shield| {
+            if (shield.isHit(bullet)) return true;
+        }
+        return false;
+    }
 };
 
 const GameState = struct {
-    game_config: GameConfig,
+    game_config: Config.Game,
     // entities needing access to game_state
     player_p: *Player,
     bullet_pool_p: *BulletPool,
@@ -279,7 +358,7 @@ const GameState = struct {
     // shields
     // invaders
 
-    pub fn init(game_config: GameConfig, player_p: *Player, bullet_pool_p: *BulletPool) @This() {
+    pub fn init(game_config: Config.Game, player_p: *Player, bullet_pool_p: *BulletPool) @This() {
         return .{
             .game_config = game_config,
             .player_p = player_p,
@@ -287,14 +366,14 @@ const GameState = struct {
         };
     }
 
-    pub fn update(self: @This()) void {
-        self.player_p.*.update();
-        self.bullet_pool_p.*.update();
+    pub fn update(self: *@This()) void {
+        self.player_p.update();
+        self.bullet_pool_p.update();
     }
 
     pub fn draw(self: @This()) void {
-        self.player_p.*.draw();
-        self.bullet_pool_p.*.draw();
+        self.player_p.draw();
+        self.bullet_pool_p.draw();
     }
 };
 
@@ -326,7 +405,7 @@ const StartMenu = struct {
 
     startPressed: bool,
 
-    pub fn init(gameConfig: GameConfig) @This() {
+    pub fn init(gameConfig: Config.Game) @This() {
         const titleText = "Zig Invaderz";
         const titleFontSize = @as(f32, @floatFromInt(gameConfig.screenHeight)) / 10.0;
         const titleTextWidth = (rl.measureText(titleText, @intFromFloat(titleFontSize)));
@@ -379,7 +458,7 @@ const StartMenu = struct {
 
     pub fn update(self: *@This()) void {
         if (self.isMouseOnStartRect() and rl.isMouseButtonPressed(rl.MouseButton.left)) {
-            std.debug.print("start pressed in update function", .{});
+            std.debug.print("start pressed in update function\n", .{});
             self.startPressed = true;
         }
     }
@@ -387,26 +466,27 @@ const StartMenu = struct {
 
 pub fn main() !void {
     var dba = std.heap.DebugAllocator(.{}){};
-    // var gpa = std.heap.GeneralPurposeAllocator.init(.{});
     const allocator = dba.allocator();
+    defer _ = dba.deinit();
 
     // init window
     const screenWidth = 1280;
     const screenHeight = 760;
     rl.initWindow(screenWidth, screenHeight, "Zig Invaderz");
 
-    const game_config = GameConfig.fromScreenDims(screenWidth, screenHeight);
+    const game_config = Config.Game.fromScreenDims(screenWidth, screenHeight);
     const startMenu = StartMenu.init(game_config);
 
     // create bullet pool
-    var bullet_pool = try BulletPool.initStateless(allocator, game_config.bulletConfig, 10);
+    var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
     // create player
     var player: Player = Player.initStateless(game_config.playerConfig);
     // create game state
-    var game_state = GameState.init(game_config, &player, &bullet_pool);
+    var game_state = GameState.init(game_config, &player, &player_bullet_pool);
 
     // attach game state to entities requiring it
-    bullet_pool.attachGameState(&game_state);
+    
+    player_bullet_pool.attachGameState(&game_state);
     player.attachGameState(&game_state);
 
     var activeScreen = ActiveScreen{ .start_menu = startMenu };

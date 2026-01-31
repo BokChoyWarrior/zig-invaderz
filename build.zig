@@ -1,11 +1,5 @@
 const std = @import("std");
 
-// Although this function looks imperative, it does not perform the build
-// directly and instead it mutates the build graph (`b`) that will be then
-// executed by an external runner. The functions in `std.Build` implement a DSL
-// for defining build steps and express dependencies between them, allowing the
-// build runner to parallelize the build automatically (and the cache system to
-// know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
     // Standard target options allow the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
@@ -21,10 +15,7 @@ pub fn build(b: *std.Build) void {
     // target and optimize options) will be listed when running `zig build --help`
     // in this directory.
 
-    const raylib_zig_dep = b.dependency("raylib_zig", .{
-        .target = target,
-        .optimize = optimize
-    });
+    const raylib_zig_dep = b.dependency("raylib_zig", .{ .target = target, .optimize = optimize });
     const raylib = raylib_zig_dep.module("raylib");
     const raylib_artifact = raylib_zig_dep.artifact("raylib");
 
