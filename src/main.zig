@@ -13,9 +13,9 @@ const Rect = struct {
 
     pub fn intersects(self: Rect, other: Rect) bool {
         return self.x < other.x + other.width and
-            other.x < self.x + self.width and
+            self.x + self.width > other.x and
             self.y < other.y + other.height and
-            other.y < self.x + self.height;
+            self.y + self.height > other.y;
     }
 
     pub fn draw(self: Rect, color: rl.Color) void {
@@ -241,10 +241,19 @@ const Bullet = struct {
         if (self.is_active) {
             self.*.pos_x += self.velocity.x;
             self.*.pos_y += self.velocity.y;
-        }
-        // TODO: Generalise check for out of bounds
-        if (self.pos_y < 0) {
-            self.is_active = false;
+
+            // TODO: Generalise check for out of bounds
+            const screenWidthF = @as(f32, @floatFromInt(rl.getScreenWidth()));
+            const screenHeightF = @as(f32, @floatFromInt(rl.getScreenHeight()));
+            if ((self.pos_y < 0) or self.pos_x < 0 or self.pos_x > (screenWidthF - self.width) or self.pos_y > screenHeightF - self.height) {
+                self.is_active = false;
+            }
+
+            const intersectingShield = self.game_state_p.?.shield_manager_p.?.findIntersectingShieldForBullet(self.rect());
+            if (intersectingShield != null) {
+                intersectingShield.?.takeDamage();
+                self.is_active = false;
+            }
         }
     }
 
@@ -261,6 +270,15 @@ const Bullet = struct {
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
         self.game_state_p = game_state_p;
     }
+
+    pub fn rect(self: @This()) Rect {
+        return .{
+            .x = self.pos_x,
+            .y = self.pos_y,
+            .width = self.width,
+            .height = self.height,
+        };
+    }
 };
 const Shield = struct {
     pos_x: f32,
@@ -269,110 +287,255 @@ const Shield = struct {
     height: f32,
     health: u8,
     max_health: u8,
-    game_state_p: *GameState,
+    colour: rl.Color,
+    game_state_p: ?*GameState,
 
-    pub fn initStateless(shield_config: Config.Shield, x: f32, y: f32) @This() {
+    pub fn initStateless(config: Config.Shield, x: f32, y: f32) @This() {
         return .{
             .pos_x = x,
             .pos_y = y,
-            .width = shield_config.width,
-            .height = shield_config.height,
-            .health = 3, // default health
-            .max_health = 3,
-            .game_state_p = undefined,
+            .width = config.width,
+            .height = config.height,
+            .health = config.max_health,
+            .max_health = config.max_health,
+            .colour = config.colour,
+            .game_state_p = null,
+        };
+    }
+
+    pub fn validate(self: @This()) void {
+        assert(self.game_state_p != null);
+    }
+
+    pub fn rect(self: @This()) Rect {
+        return Rect{
+            .height = self.height,
+            .width = self.width,
+            .x = self.pos_x,
+            .y = self.pos_y,
         };
     }
 
     pub fn draw(self: @This()) void {
-        if (self.health > 0) {
+        // just to avoid drawing if unnnecessary
+        if (self.isAlive()) {
             rl.drawRectangle(
                 @intFromFloat(self.pos_x),
                 @intFromFloat(self.pos_y),
                 @intFromFloat(self.width),
                 @intFromFloat(self.height),
-                rl.Color.green,
+                self.colour,
             );
         }
     }
 
-    pub fn update(self: *@This()) void {
-        // TODO: Handle collision with bullets
-        if (self.*.health <= 0) {
-            std.debug.print("dead", .{});
-        }
+    fn updateColourAlpha(self: *@This()) void {
+        const alphaUnit = @as(f32, @floatFromInt(self.health)) / @as(f32, @floatFromInt(self.max_health));
+        self.colour = self.colour.alpha(alphaUnit);
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
-        self.*.game_state_p = game_state_p;
+        self.game_state_p = game_state_p;
     }
 
-    pub fn isHit(self: *@This(), bullet: *Bullet) bool {
-        if (!bullet.is_active) return false;
-        const rect = Rect{
-            .x = self.pos_x,
-            .y = self.pos_y,
-            .width = self.width,
-            .height = self.height,
-        };
-        const bulletRect = Rect{
-            .x = bullet.pos_x,
-            .y = bullet.pos_y,
-            .width = bullet.width,
-            .height = bullet.height,
-        };
-        if (rect.intersects(bulletRect)) {
-            self.*.health -= 1;
-            return true;
-        }
-        return false;
+    pub fn takeDamage(self: *@This()) void {
+        self.health -= 1;
+        self.updateColourAlpha();
+    }
+
+    pub fn isAlive(self: @This()) bool {
+        return self.health > 0;
     }
 };
 
+const NUM_SHHIELDS = 5;
+
 const ShieldManager = struct {
-    shields: [3]Shield,
-    allocator: Allocator,
-    game_state_p: *GameState,
+    shields: [NUM_SHHIELDS]Shield,
+    game_state_p: ?*GameState,
 
-    pub fn initStateless(allocator: Allocator, shield_config: Config.Shield) !@This() {
-        const shields: [3]Shield = undefined;
-        const screenWidthF: f32 = 1280.0; // assuming screen width
-        const spacingX: f32 = shield_config.spacing * 2;
-        const startX: f32 = (screenWidthF / 2.0) - (spacingX * 1.5);
-        const startY: f32 = 400.0;
+    pub fn initStateless(shield_config: Config.Shield) @This() {
+        var shields: [NUM_SHHIELDS]Shield = undefined;
+        const spacingX: f32 = shield_config.spacing;
+        const startX: f32 = ((@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0)) - (spacingX + shield_config.width / 2) * (1 * NUM_SHHIELDS * 0.5);
+        const startY: f32 = (@as(f32, @floatFromInt(rl.getScreenHeight()))) - 100.0;
 
-        for (shields, 0..) |*shield, i| {
-            shield.* = Shield.initStateless(shield_config, startX + (@as(f32, @floatFromInt(i)) * spacingX), startY);
+        for (&shields, 0..NUM_SHHIELDS) |*shield, i| {
+            shield.* = Shield.initStateless(
+                shield_config,
+                startX + (@as(f32, @floatFromInt(i)) * (spacingX + shield_config.width)),
+                startY - (shield_config.height / 2.0),
+            );
         }
 
         return .{
             .shields = shields,
-            .allocator = allocator,
-            .game_state_p = undefined,
+            .game_state_p = null,
         };
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
         self.game_state_p = game_state_p;
-        for (self.*.shields) |*shield| {
+        for (&self.shields) |*shield| {
             shield.attachGameState(game_state_p);
         }
     }
 
+    pub fn validate(self: @This()) void {
+        assert(self.game_state_p != null);
+        for (self.shields) |shield| {
+            shield.validate();
+        }
+    }
+
     pub fn draw(self: @This()) void {
-        for (self.shields) |*shield| {
+        for (self.shields) |shield| {
             shield.draw();
         }
     }
 
-    pub fn update() void {
-        // TODO: Handle collisions with bullets
+    // pub fn update(self: *@This()) void {
+    //     for (&self.shields) |*shield| {
+    //         shield.update();
+    //     }
+    // }
+
+    // generic rect, maybe we want to add bombs or other projectiles later
+    // returns shield pointer to callee so they can do something with it (damage, etc)
+    pub fn findIntersectingShieldForBullet(self: *@This(), other_rect: Rect) ?*Shield {
+        for (&self.shields) |*shield| {
+            if (shield.isAlive() and shield.rect().intersects(other_rect)) return shield;
+            // shouldn't hit two at once!
+        }
+        return null;
+    }
+};
+
+const Invader = struct {
+    config: Config.Invader,
+    pos_x: f32,
+    pos_y: f32,
+    width: f32,
+    height: f32,
+    colour: rl.Color,
+    is_alive: bool,
+
+    game_state_p: ?*GameState,
+
+    pub fn initStateless(config: Config.Invader, x: f32, y: f32) @This() {
+        return .{
+            .pos_x = x,
+            .pos_y = y,
+            .width = config.width,
+            .height = config.height,
+            .colour = config.colour,
+            .is_alive = true,
+            .config = config,
+            .game_state_p = null,
+        };
     }
 
-    pub fn isHit(self: *@This(), bullet: *Bullet) bool {
-        for (self.*.shields) |*shield| {
-            if (shield.isHit(bullet)) return true;
+    pub fn validate(self: @This()) void {
+        assert(self.game_state_p != null);
+    }
+
+    pub fn rect(self: @This()) Rect {
+        return Rect{
+            .height = self.height,
+            .width = self.width,
+            .x = self.pos_x,
+            .y = self.pos_y,
+        };
+    }
+
+    pub fn draw(self: @This()) void {
+        if (self.is_alive) {
+            std.debug.print("invader being drawn: {any}\n", .{self});
+            rl.drawRectangle(
+                @intFromFloat(self.pos_x),
+                @intFromFloat(self.pos_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                self.colour,
+            );
         }
-        return false;
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.game_state_p = game_state_p;
+    }
+
+    pub fn kill(self: *@This()) void {
+        self.is_alive = false;
+    }
+};
+
+const NUM_INVADERS_X = 10;
+const NUM_INVADERS_Y = 5;
+
+const InvaderManager = struct {
+    invader_config: Config.Invader,
+    group_width: f32,
+    group_height: f32,
+    group_x: f32,
+    group_y: f32,
+
+    // parent
+    game_state_p: ?*GameState = null,
+    // children
+    invaders: [NUM_INVADERS_Y][NUM_INVADERS_X]Invader,
+
+    pub fn initStateless(invader_config: Config.Invader) @This() {
+        const group_width = invader_config.width * (2 + NUM_INVADERS_X);
+        const group_height = invader_config.height * (2 + NUM_INVADERS_Y);
+
+        const group_x = (@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0) - (group_width / 2.0);
+        const group_y = (@as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0) - (group_height / 2.0);
+
+        var invaders: [NUM_INVADERS_Y][NUM_INVADERS_X]Invader = undefined;
+
+        for (&invaders, 0..NUM_INVADERS_Y) |*row, y| {
+            for (row, 0..NUM_INVADERS_X) |*invader, x| {
+                const pos_x = (@as(f32, @floatFromInt(x)) * (invader_config.width * 2)) + group_x;
+                const pos_y = (@as(f32, @floatFromInt(y)) * (invader_config.height * 2)) + group_y;
+                invader.* = Invader.initStateless(invader_config, pos_x, pos_y);
+            }
+        }
+
+        return .{
+            .invader_config = invader_config,
+            .invaders = invaders,
+            .group_width = group_width,
+            .group_height = group_height,
+            .group_x = group_x,
+            .group_y = group_y,
+        };
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.game_state_p = game_state_p;
+        for (&self.invaders) |*row| {
+            for (row) |*invader| {
+                invader.attachGameState(game_state_p);
+            }
+        }
+    }
+
+    pub fn validate(self: *@This()) void {
+        assert(self.game_state_p != null);
+        for (&self.invaders) |*row| {
+            for (row) |*invader| {
+                invader.validate();
+            }
+        }
+    }
+
+    pub fn draw(self: @This()) void {
+        for (self.invaders) |row| {
+            for (row) |invader| {
+                invader.draw();
+            }
+        }
     }
 };
 
@@ -381,33 +544,48 @@ const GameState = struct {
     // entities needing access to game_state should also be added to the validate function (and if necessary implement a similar function of their own)
     player_p: ?*Player,
     bullet_pool_p: ?*BulletPool,
-    // TODO:
-    // shields
-    // invaders
+    shield_manager_p: ?*ShieldManager,
+    invader_manager_p: ?*InvaderManager,
 
-    pub fn init(game_config: Config.Game, player_p: *Player, bullet_pool_p: *BulletPool) @This() {
+    pub fn init(
+        game_config: Config.Game,
+        player_p: *Player,
+        bullet_pool_p: *BulletPool,
+        shield_manager_p: *ShieldManager,
+        invader_manager_p: *InvaderManager,
+    ) @This() {
         return .{
             .game_config = game_config,
             .player_p = player_p,
             .bullet_pool_p = bullet_pool_p,
+            .shield_manager_p = shield_manager_p,
+            .invader_manager_p = invader_manager_p,
         };
     }
 
     pub fn update(self: *@This()) void {
         self.player_p.?.update();
         self.bullet_pool_p.?.update();
+        // self.invader_manager_p.?.update();
+        // self.shield_manager_p.?.update();
     }
 
     pub fn draw(self: @This()) void {
         self.player_p.?.draw();
         self.bullet_pool_p.?.draw();
+        self.shield_manager_p.?.draw();
+        self.invader_manager_p.?.draw();
     }
 
     pub fn validate(self: @This()) void {
         assert(self.bullet_pool_p != null);
         assert(self.player_p != null);
+        assert(self.shield_manager_p != null);
+        assert(self.invader_manager_p != null);
         self.player_p.?.validate();
         self.bullet_pool_p.?.validate();
+        self.shield_manager_p.?.validate();
+        self.invader_manager_p.?.validate();
     }
 };
 
@@ -492,7 +670,6 @@ const StartMenu = struct {
 
     pub fn update(self: *@This()) void {
         if (self.isMouseOnStartRect() and rl.isMouseButtonPressed(rl.MouseButton.left)) {
-            std.debug.print("start pressed in update function\n", .{});
             self.startPressed = true;
         }
     }
@@ -511,20 +688,22 @@ pub fn main() !void {
     const game_config = Config.Game.fromScreenDims(screenWidth, screenHeight);
     const startMenu = StartMenu.init(game_config);
 
-    // create bullet pool
     var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
     defer player_bullet_pool.deinit();
-    // create player
     var player: Player = Player.initStateless(game_config.playerConfig);
+    var shield_mgr = ShieldManager.initStateless(game_config.shieldConfig);
+    var invader_mgr = InvaderManager.initStateless(game_config.invaderConfig);
     // create game state
     // maybe we should also return the `validate` function here, to help remind the idiot behind the keyboard to actually invoke this function at some point
-    var game_state = GameState.init(game_config, &player, &player_bullet_pool);
+    var game_state = GameState.init(game_config, &player, &player_bullet_pool, &shield_mgr, &invader_mgr);
 
     // attach game state to entities requiring it
 
     player_bullet_pool.attachGameState(&game_state);
     player.attachGameState(&game_state);
     player.attach_bullet_pool(&player_bullet_pool);
+    shield_mgr.attachGameState(&game_state);
+    invader_mgr.attachGameState(&game_state);
 
     game_state.validate();
 

@@ -46,21 +46,28 @@ pub const Bullet = struct {
     pub fn fromScreenDims(screenWidth: f32) @This() {
         const bullet_speed = 5.0;
         const defaultScalar = 1.0 / 500.0;
-        return .{ .width = screenWidth * defaultScalar, .height = screenWidth * defaultScalar * 2.0, .speed = screenWidth * defaultScalar * bullet_speed };
+        // specifically we want a square bullet - so we use the width to set both dimensions
+        return .{ .width = screenWidth * defaultScalar, .height = screenWidth * defaultScalar, .speed = screenWidth * defaultScalar * bullet_speed };
     }
 };
 
 pub const Shield = struct {
     width: f32,
     height: f32,
+    max_health: u8,
+    // space from one shield x to next x
     spacing: f32,
+    colour: rl.Color,
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar = 1.0 / 10.0;
+        const defaultScalar = 1.0 / 20.0;
+        const width = screenWidth * defaultScalar;
         return .{
-            .width = screenWidth * defaultScalar,
-            .height = screenWidth * defaultScalar,
-            .spacing = screenWidth * defaultScalar,
+            .width = width,
+            .height = width * 0.5,
+            .max_health = 5,
+            .spacing = width * 3,
+            .colour = rl.Color.blue,
         };
     }
 };
@@ -68,16 +75,14 @@ pub const Shield = struct {
 pub const Invader = struct {
     width: f32,
     height: f32,
-    spacingX: f32,
-    spacingY: f32,
+    colour: rl.Color,
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar = 1 / 30;
+        const defaultScalar: f32 = 1.0 / 30.0;
         return .{
-            .width = screenWidth * defaultScalar * 2,
-            .height = screenWidth * defaultScalar,
-            .spacingX = screenWidth * defaultScalar,
-            .spacingY = screenWidth * defaultScalar,
+            .width = screenWidth * defaultScalar,
+            .height = screenWidth * defaultScalar * 0.5,
+            .colour = rl.Color.red,
         };
     }
 };
