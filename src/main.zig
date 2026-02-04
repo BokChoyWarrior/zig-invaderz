@@ -254,6 +254,12 @@ const Bullet = struct {
                 intersectingShield.?.takeDamage();
                 self.is_active = false;
             }
+
+            const intersectingInvader = self.game_state_p.?.invader_manager_p.?.findIntersectingInvaderForBullet(self.rect());
+            if (intersectingInvader != null) {
+                intersectingInvader.?.*.kill();
+                self.is_active = false;
+            }
         }
     }
 
@@ -348,28 +354,40 @@ const Shield = struct {
     }
 };
 
-const NUM_SHHIELDS = 5;
+const NUM_SHIELDS = 5;
 
 const ShieldManager = struct {
-    shields: [NUM_SHHIELDS]Shield,
+    shields: [NUM_SHIELDS]Shield,
+    group_width: f32,
+    group_height: f32,
+    group_x: f32,
+    group_y: f32,
     game_state_p: ?*GameState,
 
-    pub fn initStateless(shield_config: Config.Shield) @This() {
-        var shields: [NUM_SHHIELDS]Shield = undefined;
-        const spacingX: f32 = shield_config.spacing;
-        const startX: f32 = ((@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0)) - (spacingX + shield_config.width / 2) * (1 * NUM_SHHIELDS * 0.5);
-        const startY: f32 = (@as(f32, @floatFromInt(rl.getScreenHeight()))) - 100.0;
+    pub fn initStateless(config: Config.Shield) @This() {
+        const group_width = (config.width * NUM_SHIELDS) + ((config.width * config.spacing_factor) * (NUM_SHIELDS - 1));
+        const group_height = config.height;
 
-        for (&shields, 0..NUM_SHHIELDS) |*shield, i| {
+        const group_x = (@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0) - (group_width / 2.0);
+        std.debug.print("shields start x: {}\ngroup_width: {}\n", .{ group_x, group_width });
+        const group_y = (@as(f32, @floatFromInt(rl.getScreenHeight()))) - 100.0;
+
+        var shields: [NUM_SHIELDS]Shield = undefined;
+
+        for (&shields, 0..NUM_SHIELDS) |*shield, i| {
             shield.* = Shield.initStateless(
-                shield_config,
-                startX + (@as(f32, @floatFromInt(i)) * (spacingX + shield_config.width)),
-                startY - (shield_config.height / 2.0),
+                config,
+                group_x + (@as(f32, @floatFromInt(i)) * ((config.spacing_factor + 1) * config.width)),
+                group_y - (config.height / 2.0),
             );
         }
 
         return .{
             .shields = shields,
+            .group_y = group_y,
+            .group_x = group_x,
+            .group_width = group_width,
+            .group_height = group_height,
             .game_state_p = null,
         };
     }
@@ -450,7 +468,6 @@ const Invader = struct {
 
     pub fn draw(self: @This()) void {
         if (self.is_alive) {
-            std.debug.print("invader being drawn: {any}\n", .{self});
             rl.drawRectangle(
                 @intFromFloat(self.pos_x),
                 @intFromFloat(self.pos_y),
@@ -470,41 +487,56 @@ const Invader = struct {
     }
 };
 
-const NUM_INVADERS_X = 10;
-const NUM_INVADERS_Y = 5;
+const INVADERS_COLS = 10;
+const INVADERS_ROWS = 5;
 
 const InvaderManager = struct {
-    invader_config: Config.Invader,
+    config: Config.Invader,
     group_width: f32,
     group_height: f32,
     group_x: f32,
     group_y: f32,
+    direction_x: enum(i2) { left = -1, right = 1 },
+    speed: f32,
 
     // parent
     game_state_p: ?*GameState = null,
     // children
-    invaders: [NUM_INVADERS_Y][NUM_INVADERS_X]Invader,
+    invaders: [INVADERS_ROWS][INVADERS_COLS]Invader,
+    // invaders_flat: [NUM_INVADERS_X * NUM_INVADERS_Y]*Invader,
 
     pub fn initStateless(invader_config: Config.Invader) @This() {
-        const group_width = invader_config.width * (2 + NUM_INVADERS_X);
-        const group_height = invader_config.height * (2 + NUM_INVADERS_Y);
+        // num invaders heights (width*n) + inbetween spaces heights (width*(n-1))
+        const group_width = invader_config.width * ((2 * INVADERS_COLS) - 1);
+        const group_height = invader_config.height * 2 * (INVADERS_ROWS - 1);
 
         const group_x = (@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0) - (group_width / 2.0);
-        const group_y = (@as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0) - (group_height / 2.0);
+        const group_y = 50.0;
 
-        var invaders: [NUM_INVADERS_Y][NUM_INVADERS_X]Invader = undefined;
+        var invaders: [INVADERS_ROWS][INVADERS_COLS]Invader = undefined;
+        // var flatInvaders: [NUM_INVADERS_X * NUM_INVADERS_Y]*Invader = undefined;
 
-        for (&invaders, 0..NUM_INVADERS_Y) |*row, y| {
-            for (row, 0..NUM_INVADERS_X) |*invader, x| {
+        for (&invaders, 0..INVADERS_ROWS) |*row, y| {
+            for (row, 0..INVADERS_COLS) |*invader, x| {
                 const pos_x = (@as(f32, @floatFromInt(x)) * (invader_config.width * 2)) + group_x;
                 const pos_y = (@as(f32, @floatFromInt(y)) * (invader_config.height * 2)) + group_y;
-                invader.* = Invader.initStateless(invader_config, pos_x, pos_y);
+                const thisInvader = Invader.initStateless(invader_config, pos_x, pos_y);
+                invader.* = thisInvader;
+
+                // const flatArrayIndex = (y * NUM_INVADERS_Y) + x;
+                // flatInvaders[flatArrayIndex] = invader;
+
+                // const flat0 = flatInvaders[0];
+                // const mdim0 = invaders[0][0];
+                // assert(std.meta.eql(flat0, &mdim0));
             }
         }
 
         return .{
-            .invader_config = invader_config,
+            .config = invader_config,
             .invaders = invaders,
+            .direction_x = .right,
+            .speed = invader_config.speed,
             .group_width = group_width,
             .group_height = group_height,
             .group_x = group_x,
@@ -528,6 +560,10 @@ const InvaderManager = struct {
                 invader.validate();
             }
         }
+
+        // for (&self.invaders_flat) |invader_p| {
+        //     invader_p.*.validate();
+        // }
     }
 
     pub fn draw(self: @This()) void {
@@ -536,6 +572,49 @@ const InvaderManager = struct {
                 invader.draw();
             }
         }
+    }
+
+    pub fn update(self: *@This()) void {
+        var x_change: f32 = 0.0;
+        var y_change: f32 = 0.0;
+
+        x_change = self.speed * @as(f32, @floatFromInt(@intFromEnum(self.direction_x)));
+
+        // we must modify the x value before testing for screen edges, otherwise
+        self.group_x += x_change;
+
+        // check if group is touching screen edges, and if so, reverse direction and move down
+        if (self.group_x <= 0 or self.group_x >= @as(f32, @floatFromInt(rl.getScreenWidth())) - self.group_width) {
+            (self.direction_x) = @enumFromInt(@intFromEnum(self.direction_x) * -1);
+
+            y_change = self.speed * 10.0;
+        }
+
+        self.group_y += y_change;
+
+        var i: u8 = 0;
+        while (self.getInvader(i)) |invader| : (i += 1) {
+            invader.*.pos_x += x_change;
+            invader.*.pos_y += y_change;
+        }
+    }
+
+    // generic rect, maybe we want to add bombs or other projectiles later
+    // returns shield pointer to callee so they can do something with it (damage, etc)
+    pub fn findIntersectingInvaderForBullet(self: *@This(), other_rect: Rect) ?*Invader {
+        for (&self.invaders) |*row| {
+            for (row) |*invader| {
+                if (invader.is_alive and invader.rect().intersects(other_rect)) return invader;
+            }
+        }
+        return null;
+    }
+
+    pub fn getInvader(self: *@This(), index: u8) ?*Invader {
+        const row = index / INVADERS_COLS;
+        const col = index % INVADERS_COLS;
+        if (row >= INVADERS_ROWS) return null;
+        return &self.invaders[row][col];
     }
 };
 
@@ -566,7 +645,7 @@ const GameState = struct {
     pub fn update(self: *@This()) void {
         self.player_p.?.update();
         self.bullet_pool_p.?.update();
-        // self.invader_manager_p.?.update();
+        self.invader_manager_p.?.update();
         // self.shield_manager_p.?.update();
     }
 

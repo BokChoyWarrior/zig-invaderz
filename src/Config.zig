@@ -56,7 +56,7 @@ pub const Shield = struct {
     height: f32,
     max_health: u8,
     // space from one shield x to next x
-    spacing: f32,
+    spacing_factor: f32,
     colour: rl.Color,
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
@@ -66,7 +66,7 @@ pub const Shield = struct {
             .width = width,
             .height = width * 0.5,
             .max_health = 5,
-            .spacing = width * 3,
+            .spacing_factor = 3.0,
             .colour = rl.Color.blue,
         };
     }
@@ -76,6 +76,7 @@ pub const Invader = struct {
     width: f32,
     height: f32,
     colour: rl.Color,
+    speed: f32,
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
         const defaultScalar: f32 = 1.0 / 30.0;
@@ -83,6 +84,7 @@ pub const Invader = struct {
             .width = screenWidth * defaultScalar,
             .height = screenWidth * defaultScalar * 0.5,
             .colour = rl.Color.red,
+            .speed = 5,
         };
     }
 };
