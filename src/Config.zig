@@ -6,18 +6,20 @@ pub const Player = struct {
     startX: f32,
     startY: f32,
     speed: f32,
+    fireDelay: u16,
 
-    pub fn init(width: f32, height: f32, startX: f32, startY: f32, speed: f32) @This() {
+    pub fn init(width: f32, height: f32, startX: f32, startY: f32, speed: f32, fireDelay: u16) @This() {
         return .{
             .width = width,
             .height = height,
             .startX = startX,
             .startY = startY,
             .speed = speed,
+            .fireDelay = fireDelay,
         };
     }
 
-    pub fn fromScreenDims(screenWidth: f32, screenHeight: f32) @This() {
+    pub fn fromScreenDims(screenWidth: f32, screenHeight: f32, fireDelay: u16) @This() {
         const defaultSizeModifier = 1.0 / 50.0;
         const width = screenWidth * defaultSizeModifier * 1 / 2;
         return .{
@@ -26,28 +28,42 @@ pub const Player = struct {
             .startX = (screenWidth / 2.0) + (width / 2.0),
             .startY = screenHeight * (1.0 - defaultSizeModifier),
             .speed = width,
+            .fireDelay = fireDelay,
         };
     }
+};
+
+pub const CollidesWith = struct {
+    player: bool = false,
+    shield: bool = false,
+    invaders: bool = false,
 };
 
 pub const Bullet = struct {
     width: f32,
     height: f32,
     speed: f32,
+    collides_with: CollidesWith,
 
-    pub fn init(width: f32, height: f32, speed: f32) @This() {
+    pub fn init(width: f32, height: f32, speed: f32, collides_with: CollidesWith) @This() {
         return .{
             .width = width,
             .height = height,
             .speed = speed,
+            .collides_with = collides_with,
         };
     }
 
-    pub fn fromScreenDims(screenWidth: f32) @This() {
+    pub fn fromScreenDims(screenWidth: f32, collides_with: CollidesWith) @This() {
         const bullet_speed = 2.0;
         const defaultScalar = 1.0 / 200.0;
         // specifically we want a square bullet - so we use the width to set both dimensions
-        return .{ .width = screenWidth * defaultScalar, .height = screenWidth * defaultScalar, .speed = screenWidth * defaultScalar * bullet_speed };
+        return .{
+            .width = screenWidth * defaultScalar,
+            .height = screenWidth * defaultScalar,
+            .speed = screenWidth * defaultScalar * bullet_speed,
+            .collides_with = collides_with,
+        };
     }
 };
 
@@ -77,14 +93,16 @@ pub const Invader = struct {
     height: f32,
     colour: rl.Color,
     speed: f32,
+    move_delay: u16,
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
-        const defaultScalar: f32 = 1.0 / 30.0;
+        const defaultSizeScalar: f32 = 1.0 / 30.0;
         return .{
-            .width = screenWidth * defaultScalar,
-            .height = screenWidth * defaultScalar * 0.5,
+            .width = screenWidth * defaultSizeScalar,
+            .height = screenWidth * defaultSizeScalar * 0.5,
             .colour = rl.Color.red,
-            .speed = 3,
+            .speed = 0.5,
+            .move_delay = 60,
         };
     }
 };
@@ -115,8 +133,8 @@ pub const Game = struct {
         return .{
             .screenWidth = screenWidth,
             .screenHeight = screenHeight,
-            .playerConfig = Player.fromScreenDims(screenWidthF, screenHeightF),
-            .playerBulletPoolConfig = BulletPool.init(10, Bullet.fromScreenDims(screenWidthF)),
+            .playerConfig = Player.fromScreenDims(screenWidthF, screenHeightF, 60),
+            .playerBulletPoolConfig = BulletPool.init(10, Bullet.fromScreenDims(screenWidthF, .{ .invaders = true, .shield = true })),
             .shieldConfig = Shield.fromScreenDims(screenWidthF),
             .invaderConfig = Invader.fromScreenDims(screenWidthF),
         };

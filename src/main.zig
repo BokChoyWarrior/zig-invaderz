@@ -62,6 +62,8 @@ const Player = struct {
     pos_x: f32,
     pos_y: f32,
     speed: f32,
+    fire_delay: u16,
+    fire_timer: u16 = 0,
     // parents
     game_state_p: ?*GameState,
     // children
@@ -74,6 +76,7 @@ const Player = struct {
             .pos_x = playerConfig.startX,
             .pos_y = playerConfig.startY,
             .speed = playerConfig.speed,
+            .fire_delay = playerConfig.fireDelay,
             .game_state_p = null,
             .bullet_pool_p = null,
         };
@@ -120,13 +123,19 @@ const Player = struct {
 
         // shooting
         // TODO: Check if minimum time has passed since last shot
-        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
+        if ((rl.isKeyPressed(rl.KeyboardKey.space) or
+            rl.isKeyDown(rl.KeyboardKey.space) or
+            rl.isKeyPressedRepeat(rl.KeyboardKey.space)) and
+            self.fire_timer >= self.fire_delay)
+        {
+            self.fire_timer = 0;
             // Let bullet pool know where to fire from
             const bullet_start_x = self.pos_x + (self.width / 2.0);
             const bullet_start_y = self.pos_y;
             const direction = Vec2.init(0.0, -1.0);
             self.bullet_pool_p.?.fire_bullet(bullet_start_x, bullet_start_y, direction);
         }
+        self.fire_timer += 1;
     }
 
     pub fn update(self: *@This()) void {
@@ -211,6 +220,7 @@ const Bullet = struct {
     direction: Vec2,
     velocity: Vec2,
     is_active: bool,
+    collides_with: Config.CollidesWith,
     // parents
     game_state_p: ?*GameState,
 
@@ -225,6 +235,7 @@ const Bullet = struct {
             .game_state_p = undefined,
             .direction = undefined,
             .velocity = undefined,
+            .collides_with = bullet_config.collides_with,
         };
     }
 
@@ -239,7 +250,7 @@ const Bullet = struct {
                 @intFromFloat(self.pos_y),
                 @intFromFloat(self.width),
                 @intFromFloat(self.height),
-                rl.Color.red,
+                rl.Color.yellow,
             );
         }
     }
@@ -256,16 +267,24 @@ const Bullet = struct {
                 self.is_active = false;
             }
 
-            const intersectingShield = self.game_state_p.?.shield_manager_p.?.findIntersectingShieldForBullet(self.rect());
-            if (intersectingShield != null) {
-                intersectingShield.?.takeDamage();
-                self.is_active = false;
+            if (self.collides_with.shield) {
+                const intersectingShield = self.game_state_p.?.shield_manager_p.?.findIntersectingShieldForBullet(self.rect());
+                if (intersectingShield != null) {
+                    intersectingShield.?.takeDamage();
+                    self.is_active = false;
+                }
             }
 
-            const intersectingInvader = self.game_state_p.?.invader_manager_p.?.findIntersectingInvaderForBullet(self.rect());
-            if (intersectingInvader != null) {
-                intersectingInvader.?.*.kill();
-                self.is_active = false;
+            if (self.collides_with.invaders) {
+                const intersectingInvader = self.game_state_p.?.invader_manager_p.?.findIntersectingInvaderForBullet(self.rect());
+                if (intersectingInvader != null) {
+                    intersectingInvader.?.*.kill();
+                    self.is_active = false;
+                }
+            }
+
+            if (self.collides_with.player) {
+                // TODO
             }
         }
     }
@@ -506,6 +525,8 @@ const InvaderManager = struct {
     direction_x: enum(i2) { left = -1, right = 1 },
     speed: f32,
     rand: std.Random,
+    move_delay: u16,
+    move_timer: u16 = 0,
 
     // parent
     game_state_p: ?*GameState = null,
@@ -551,6 +572,7 @@ const InvaderManager = struct {
             .group_x = group_x,
             .group_y = group_y,
             .rand = rand,
+            .move_delay = invader_config.move_delay,
         };
     }
 
@@ -592,19 +614,19 @@ const InvaderManager = struct {
         var x_change: f32 = 0.0;
         var y_change: f32 = 0.0;
 
-        x_change = self.speed * @as(f32, @floatFromInt(@intFromEnum(self.direction_x)));
-
-        // we must modify the x value before testing for screen edges, otherwise
-        self.group_x += x_change;
-
         // check if group is touching screen edges, and if so, reverse direction and move down
         if (self.group_x <= 0 or self.group_x >= @as(f32, @floatFromInt(rl.getScreenWidth())) - self.group_width) {
             (self.direction_x) = @enumFromInt(@intFromEnum(self.direction_x) * -1);
 
-            y_change = self.speed * 10.0;
+            y_change = self.speed * @as(f32, @floatFromInt(self.move_delay));
         }
 
         self.group_y += y_change;
+
+        x_change = (self.speed * @as(f32, @floatFromInt(@intFromEnum(self.direction_x))) * @as(f32, @floatFromInt(self.move_delay)));
+
+        // we must modify the x value before testing for screen edges, otherwise
+        self.group_x += x_change;
 
         var i: u8 = 0;
         while (self.getInvader(i)) |invader| : (i += 1) {
@@ -622,7 +644,11 @@ const InvaderManager = struct {
         }
     }
     pub fn update(self: *@This()) void {
-        self.move();
+        if (self.move_timer >= self.move_delay) {
+            self.move();
+            self.move_timer = 0;
+        }
+        self.move_timer += 1;
         self.randomly_fire();
         self.bullet_pool_p.?.update();
     }
@@ -805,7 +831,7 @@ pub fn main() !void {
 
     var shield_mgr = ShieldManager.initStateless(game_config.shieldConfig);
 
-    const invader_bullet_pool_config = Config.BulletPool.init(5, Config.Bullet.init(5, 5, 1));
+    const invader_bullet_pool_config = Config.BulletPool.init(5, Config.Bullet.init(5, 5, 10, .{ .player = true, .shield = true }));
     var invader_bullet_pool = try BulletPool.initStateless(allocator, invader_bullet_pool_config);
     defer invader_bullet_pool.deinit();
     var invader_mgr = InvaderManager.initStateless(game_config.invaderConfig, rand);
