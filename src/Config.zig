@@ -44,8 +44,8 @@ pub const Bullet = struct {
     }
 
     pub fn fromScreenDims(screenWidth: f32) @This() {
-        const bullet_speed = 5.0;
-        const defaultScalar = 1.0 / 500.0;
+        const bullet_speed = 2.0;
+        const defaultScalar = 1.0 / 200.0;
         // specifically we want a square bullet - so we use the width to set both dimensions
         return .{ .width = screenWidth * defaultScalar, .height = screenWidth * defaultScalar, .speed = screenWidth * defaultScalar * bullet_speed };
     }
@@ -84,7 +84,7 @@ pub const Invader = struct {
             .width = screenWidth * defaultScalar,
             .height = screenWidth * defaultScalar * 0.5,
             .colour = rl.Color.red,
-            .speed = 5,
+            .speed = 3,
         };
     }
 };

@@ -87,6 +87,7 @@ const Player = struct {
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
         self.game_state_p = game_state_p;
+        self.bullet_pool_p.?.attachGameState(game_state_p);
     }
 
     pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
@@ -95,6 +96,7 @@ const Player = struct {
 
     pub fn draw(self: @This()) void {
         self.rect().draw(rl.Color.blue);
+        self.bullet_pool_p.?.draw();
     }
 
     pub fn rect(self: @This()) Rect {
@@ -106,7 +108,7 @@ const Player = struct {
         };
     }
 
-    pub fn update(self: *@This()) void {
+    fn update_player(self: *@This()) void {
         // movement
         if (rl.isKeyDown(rl.KeyboardKey.left)) {
             self.pos_x -= self.speed;
@@ -125,6 +127,11 @@ const Player = struct {
             const direction = Vec2.init(0.0, -1.0);
             self.bullet_pool_p.?.fire_bullet(bullet_start_x, bullet_start_y, direction);
         }
+    }
+
+    pub fn update(self: *@This()) void {
+        self.update_player();
+        self.bullet_pool_p.?.update();
     }
 };
 
@@ -498,14 +505,16 @@ const InvaderManager = struct {
     group_y: f32,
     direction_x: enum(i2) { left = -1, right = 1 },
     speed: f32,
+    rand: std.Random,
 
     // parent
     game_state_p: ?*GameState = null,
     // children
     invaders: [INVADERS_ROWS][INVADERS_COLS]Invader,
+    bullet_pool_p: ?*BulletPool = null,
     // invaders_flat: [NUM_INVADERS_X * NUM_INVADERS_Y]*Invader,
 
-    pub fn initStateless(invader_config: Config.Invader) @This() {
+    pub fn initStateless(invader_config: Config.Invader, rand: std.Random) @This() {
         // num invaders heights (width*n) + inbetween spaces heights (width*(n-1))
         const group_width = invader_config.width * ((2 * INVADERS_COLS) - 1);
         const group_height = invader_config.height * 2 * (INVADERS_ROWS - 1);
@@ -541,6 +550,7 @@ const InvaderManager = struct {
             .group_height = group_height,
             .group_x = group_x,
             .group_y = group_y,
+            .rand = rand,
         };
     }
 
@@ -551,15 +561,18 @@ const InvaderManager = struct {
                 invader.attachGameState(game_state_p);
             }
         }
+        self.bullet_pool_p.?.attachGameState(game_state_p);
     }
 
     pub fn validate(self: *@This()) void {
         assert(self.game_state_p != null);
+        assert(self.bullet_pool_p != null);
         for (&self.invaders) |*row| {
             for (row) |*invader| {
                 invader.validate();
             }
         }
+        self.bullet_pool_p.?.validate();
 
         // for (&self.invaders_flat) |invader_p| {
         //     invader_p.*.validate();
@@ -572,9 +585,10 @@ const InvaderManager = struct {
                 invader.draw();
             }
         }
+        self.bullet_pool_p.?.draw();
     }
 
-    pub fn update(self: *@This()) void {
+    fn move(self: *@This()) void {
         var x_change: f32 = 0.0;
         var y_change: f32 = 0.0;
 
@@ -599,6 +613,20 @@ const InvaderManager = struct {
         }
     }
 
+    fn randomly_fire(self: *@This()) void {
+        var i: u8 = 0;
+        while (self.getInvader(i)) |invader| : (i += 1) {
+            if (invader.is_alive and self.rand.intRangeAtMost(u16, 0, 10000) < 5) {
+                self.bullet_pool_p.?.fire_bullet(invader.*.pos_x, invader.*.pos_y, Vec2.init(0.0, 1.0));
+            }
+        }
+    }
+    pub fn update(self: *@This()) void {
+        self.move();
+        self.randomly_fire();
+        self.bullet_pool_p.?.update();
+    }
+
     // generic rect, maybe we want to add bombs or other projectiles later
     // returns shield pointer to callee so they can do something with it (damage, etc)
     pub fn findIntersectingInvaderForBullet(self: *@This(), other_rect: Rect) ?*Invader {
@@ -616,27 +644,28 @@ const InvaderManager = struct {
         if (row >= INVADERS_ROWS) return null;
         return &self.invaders[row][col];
     }
+
+    pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
+        self.bullet_pool_p = bullet_pool_p;
+    }
 };
 
 const GameState = struct {
     game_config: Config.Game,
     // entities needing access to game_state should also be added to the validate function (and if necessary implement a similar function of their own)
     player_p: ?*Player,
-    bullet_pool_p: ?*BulletPool,
     shield_manager_p: ?*ShieldManager,
     invader_manager_p: ?*InvaderManager,
 
     pub fn init(
         game_config: Config.Game,
         player_p: *Player,
-        bullet_pool_p: *BulletPool,
         shield_manager_p: *ShieldManager,
         invader_manager_p: *InvaderManager,
     ) @This() {
         return .{
             .game_config = game_config,
             .player_p = player_p,
-            .bullet_pool_p = bullet_pool_p,
             .shield_manager_p = shield_manager_p,
             .invader_manager_p = invader_manager_p,
         };
@@ -644,25 +673,21 @@ const GameState = struct {
 
     pub fn update(self: *@This()) void {
         self.player_p.?.update();
-        self.bullet_pool_p.?.update();
         self.invader_manager_p.?.update();
         // self.shield_manager_p.?.update();
     }
 
     pub fn draw(self: @This()) void {
         self.player_p.?.draw();
-        self.bullet_pool_p.?.draw();
         self.shield_manager_p.?.draw();
         self.invader_manager_p.?.draw();
     }
 
     pub fn validate(self: @This()) void {
-        assert(self.bullet_pool_p != null);
         assert(self.player_p != null);
         assert(self.shield_manager_p != null);
         assert(self.invader_manager_p != null);
         self.player_p.?.validate();
-        self.bullet_pool_p.?.validate();
         self.shield_manager_p.?.validate();
         self.invader_manager_p.?.validate();
     }
@@ -755,6 +780,13 @@ const StartMenu = struct {
 };
 
 pub fn main() !void {
+    var prng: std.Random.DefaultPrng = .init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const rand = prng.random();
+
     var dba = std.heap.DebugAllocator(.{}){};
     const allocator = dba.allocator();
     defer _ = dba.deinit();
@@ -770,18 +802,26 @@ pub fn main() !void {
     var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
     defer player_bullet_pool.deinit();
     var player: Player = Player.initStateless(game_config.playerConfig);
+
     var shield_mgr = ShieldManager.initStateless(game_config.shieldConfig);
-    var invader_mgr = InvaderManager.initStateless(game_config.invaderConfig);
+
+    const invader_bullet_pool_config = Config.BulletPool.init(5, Config.Bullet.init(5, 5, 1));
+    var invader_bullet_pool = try BulletPool.initStateless(allocator, invader_bullet_pool_config);
+    defer invader_bullet_pool.deinit();
+    var invader_mgr = InvaderManager.initStateless(game_config.invaderConfig, rand);
     // create game state
     // maybe we should also return the `validate` function here, to help remind the idiot behind the keyboard to actually invoke this function at some point
-    var game_state = GameState.init(game_config, &player, &player_bullet_pool, &shield_mgr, &invader_mgr);
+    var game_state = GameState.init(game_config, &player, &shield_mgr, &invader_mgr);
 
     // attach game state to entities requiring it
 
-    player_bullet_pool.attachGameState(&game_state);
-    player.attachGameState(&game_state);
+    // TODO: Why not just create player with the bullet pool attached? (And invader manager ofc)
     player.attach_bullet_pool(&player_bullet_pool);
+    player.attachGameState(&game_state);
+
     shield_mgr.attachGameState(&game_state);
+
+    invader_mgr.attach_bullet_pool(&invader_bullet_pool);
     invader_mgr.attachGameState(&game_state);
 
     game_state.validate();
