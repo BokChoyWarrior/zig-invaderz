@@ -67,9 +67,9 @@ const Player = struct {
     // parents
     game_state_p: ?*GameState,
     // children
-    bullet_pool_p: ?*BulletPool,
+    bullet_pool_p: *BulletPool,
 
-    pub fn initStateless(playerConfig: Config.Player) @This() {
+    pub fn initStateless(playerConfig: Config.Player, bullet_pool_p: *BulletPool) @This() {
         return .{
             .width = playerConfig.width,
             .height = playerConfig.height,
@@ -77,29 +77,24 @@ const Player = struct {
             .pos_y = playerConfig.startY,
             .speed = playerConfig.speed,
             .fire_delay = playerConfig.fireDelay,
+            .bullet_pool_p = bullet_pool_p,
             .game_state_p = null,
-            .bullet_pool_p = null,
         };
     }
 
     pub fn validate(self: @This()) void {
-        assert(self.bullet_pool_p != null);
         assert(self.game_state_p != null);
-        self.bullet_pool_p.?.validate();
+        self.bullet_pool_p.validate();
     }
 
     pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
         self.game_state_p = game_state_p;
-        self.bullet_pool_p.?.attachGameState(game_state_p);
-    }
-
-    pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
-        self.bullet_pool_p = bullet_pool_p;
+        self.bullet_pool_p.attachGameState(game_state_p);
     }
 
     pub fn draw(self: @This()) void {
         self.rect().draw(rl.Color.blue);
-        self.bullet_pool_p.?.draw();
+        self.bullet_pool_p.draw();
     }
 
     pub fn rect(self: @This()) Rect {
@@ -133,14 +128,14 @@ const Player = struct {
             const bullet_start_x = self.pos_x + (self.width / 2.0);
             const bullet_start_y = self.pos_y;
             const direction = Vec2.init(0.0, -1.0);
-            self.bullet_pool_p.?.fire_bullet(bullet_start_x, bullet_start_y, direction);
+            self.bullet_pool_p.fire_bullet(bullet_start_x, bullet_start_y, direction);
         }
         self.fire_timer += 1;
     }
 
     pub fn update(self: *@This()) void {
         self.update_player();
-        self.bullet_pool_p.?.update();
+        self.bullet_pool_p.update();
     }
 };
 
@@ -286,6 +281,9 @@ const Bullet = struct {
 
             if (self.collides_with.player) {
                 // TODO
+                if (self.rect().intersects(self.game_state_p.?.player_p.?.rect())) {
+                    self.game_state_p.?.kill_player();
+                }
             }
         }
     }
@@ -534,10 +532,10 @@ const InvaderManager = struct {
     game_state_p: ?*GameState = null,
     // children
     invaders: [INVADERS_ROWS][INVADERS_COLS]Invader,
-    bullet_pool_p: ?*BulletPool = null,
+    bullet_pool_p: *BulletPool,
     // invaders_flat: [NUM_INVADERS_X * NUM_INVADERS_Y]*Invader,
 
-    pub fn initStateless(invader_config: Config.Invader, rand: std.Random) @This() {
+    pub fn initStateless(invader_config: Config.Invader, rand: std.Random, bullet_pool_p: *BulletPool) @This() {
         // num invaders heights (width*n) + inbetween spaces heights (width*(n-1))
         const group_width = invader_config.width * ((2 * INVADERS_COLS) - 1);
         const group_height = invader_config.height * 2 * (INVADERS_ROWS - 1);
@@ -575,6 +573,7 @@ const InvaderManager = struct {
             .group_y = group_y,
             .rand = rand,
             .move_delay = invader_config.move_delay,
+            .bullet_pool_p = bullet_pool_p,
         };
     }
 
@@ -585,18 +584,17 @@ const InvaderManager = struct {
                 invader.attachGameState(game_state_p);
             }
         }
-        self.bullet_pool_p.?.attachGameState(game_state_p);
+        self.bullet_pool_p.attachGameState(game_state_p);
     }
 
     pub fn validate(self: *@This()) void {
         assert(self.game_state_p != null);
-        assert(self.bullet_pool_p != null);
         for (&self.invaders) |*row| {
             for (row) |*invader| {
                 invader.validate();
             }
         }
-        self.bullet_pool_p.?.validate();
+        self.bullet_pool_p.validate();
     }
 
     pub fn draw(self: @This()) void {
@@ -605,7 +603,7 @@ const InvaderManager = struct {
                 invader.draw();
             }
         }
-        self.bullet_pool_p.?.draw();
+        self.bullet_pool_p.draw();
     }
 
     fn is_touching_edges(self: @This()) bool {
@@ -638,8 +636,10 @@ const InvaderManager = struct {
     fn randomly_fire(self: *@This()) void {
         var i: u8 = 0;
         while (self.getInvader(i)) |invader| : (i += 1) {
-            if (invader.is_alive and self.rand.intRangeAtMost(u16, 0, 10000) < 5) {
-                self.bullet_pool_p.?.fire_bullet(invader.*.pos_x, invader.*.pos_y, Vec2.init(0.0, 1.0));
+            if (invader.is_alive and self.rand.intRangeAtMost(u16, 0, 5000) < 5) {
+                const x = invader.pos_x + (invader.width / 2.0);
+                const y = invader.pos_y + invader.height;
+                self.bullet_pool_p.fire_bullet(x, y, Vec2.init(0.0, 1.0));
             }
         }
     }
@@ -650,7 +650,7 @@ const InvaderManager = struct {
         }
         self.move_timer += 1;
         self.randomly_fire();
-        self.bullet_pool_p.?.update();
+        self.bullet_pool_p.update();
     }
 
     // generic rect, maybe we want to add bombs or other projectiles later
@@ -669,10 +669,6 @@ const InvaderManager = struct {
         const col = index % INVADERS_COLS;
         if (row >= INVADERS_ROWS) return null;
         return &self.invaders[row][col];
-    }
-
-    pub fn attach_bullet_pool(self: *@This(), bullet_pool_p: *BulletPool) void {
-        self.bullet_pool_p = bullet_pool_p;
     }
 };
 
@@ -701,7 +697,6 @@ const GameState = struct {
     pub fn update(self: *@This()) void {
         self.player_p.?.update();
         self.invader_manager_p.?.update();
-        // self.shield_manager_p.?.update();
     }
 
     pub fn draw(self: @This()) void {
@@ -722,17 +717,22 @@ const GameState = struct {
 
     pub fn drawScore(self: @This()) void {
         // std.debug.print("score: {}\n", .{self.score});
-        rl.drawText(rl.textFormat("Score: %d", .{self.score}), @divFloor(self.game_config.screenWidth, 2) - 50, 30, 40, rl.Color.white);
+        rl.drawText(rl.textFormat("Score: %d", .{self.score}), 50, rl.getScreenHeight() - 80, 40, rl.Color.white);
     }
 
     pub fn increase_score(self: *@This()) void {
         self.score += 100;
+    }
+
+    pub fn kill_player(self: *@This()) void {
+        self.game_over = true;
     }
 };
 
 const ActiveScreen = union(enum) {
     start_menu: *StartMenu,
     game_loop: *GameState,
+    game_over: *GameOver,
 
     pub fn draw(self: @This()) void {
         switch (self) {
@@ -816,6 +816,77 @@ const StartMenu = struct {
     }
 };
 
+const GameOver = struct {
+    score: u32,
+    playAgain: bool = false,
+
+    pub fn init(score: u32) @This() {
+        return .{
+            .score = score,
+        };
+    }
+
+    pub fn draw(self: @This()) void {
+        // Draw score
+        const game_over_text = rl.textFormat("GAME OVER!", .{self.score});
+        const game_over_width = rl.measureText(game_over_text, Config.LARGE_FONT_SIZE);
+
+        rl.drawText(
+            game_over_text,
+            @intFromFloat(@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0 - @as(f32, @floatFromInt(game_over_width)) / 2.0),
+            @intFromFloat(@as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0 - 120.0),
+            Config.LARGE_FONT_SIZE,
+            rl.Color.red,
+        );
+
+        const score_text = rl.textFormat("Score: %d", .{self.score});
+        const score_width = rl.measureText(score_text, Config.FONT_SIZE);
+
+        rl.drawText(
+            score_text,
+            @intFromFloat(@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0 - @as(f32, @floatFromInt(score_width)) / 2.0),
+            @intFromFloat(@as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0 - 50.0),
+            Config.FONT_SIZE,
+            rl.Color.white,
+        );
+
+        // Draw play again button
+        const playAgainText = "Play Again";
+        const playAgainTextWidth = rl.measureText(playAgainText, Config.FONT_SIZE);
+        const padding = 20.0;
+        const playAgainRectWidth = @as(f32, @floatFromInt(playAgainTextWidth)) + (padding * 2.0);
+        const playAgainRectHeight = @as(f32, @floatFromInt(Config.FONT_SIZE)) + (padding * 2.0);
+        const play_again_y_offset = 80;
+        rl.drawText(
+            playAgainText,
+            @intFromFloat(@as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0 - @as(f32, @floatFromInt(playAgainTextWidth)) / 2.0),
+            @intFromFloat(@as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0 - (Config.FONT_SIZE / 2.0) + play_again_y_offset),
+            Config.FONT_SIZE,
+            rl.Color.green,
+        );
+        rl.drawRectangleLines(
+            @intFromFloat(@as(f32, @floatFromInt(@divFloor(rl.getScreenWidth(), 2))) - (playAgainRectWidth / 2.0)),
+            @intFromFloat(@as(f32, @floatFromInt(@divFloor(rl.getScreenHeight(), 2))) - (playAgainRectHeight / 2.0) + play_again_y_offset),
+            @intFromFloat(playAgainRectWidth),
+            @intFromFloat(playAgainRectHeight),
+            rl.Color.green,
+        );
+    }
+
+    pub fn update(self: *@This()) void {
+        if (rl.isMouseButtonPressed(rl.MouseButton.left) and
+            rl.checkCollisionPointRec(rl.getMousePosition(), rl.Rectangle{
+                .x = @as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0 - 200.0 / 2.0,
+                .y = @as(f32, @floatFromInt(rl.getScreenHeight())) / 2.0 + 50.0,
+                .width = 200.0,
+                .height = 50.0,
+            }))
+        {
+            self.playAgain = true;
+        }
+    }
+};
+
 pub fn main() !void {
     var prng: std.Random.DefaultPrng = .init(blk: {
         var seed: u64 = undefined;
@@ -835,30 +906,31 @@ pub fn main() !void {
 
     const game_config = Config.Game.fromScreenDims(screenWidth, screenHeight);
     var startMenu = StartMenu.init(game_config);
+    var gameOverScreen: GameOver = undefined;
 
     var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
     defer player_bullet_pool.deinit();
-    var player: Player = Player.initStateless(game_config.playerConfig);
+    var player: Player = Player.initStateless(game_config.playerConfig, &player_bullet_pool);
 
     var shield_mgr = ShieldManager.initStateless(game_config.shieldConfig);
 
-    const invader_bullet_pool_config = Config.BulletPool.init(5, Config.Bullet.init(5, 5, 10, .{ .player = true, .shield = true }));
+    const invader_bullet_pool_config = Config.BulletPool.init(10, Config.Bullet.init(5, 5, 10, .{ .player = true, .shield = true }));
     var invader_bullet_pool = try BulletPool.initStateless(allocator, invader_bullet_pool_config);
     defer invader_bullet_pool.deinit();
-    var invader_mgr = InvaderManager.initStateless(game_config.invaderConfig, rand);
+    var invader_mgr = InvaderManager.initStateless(game_config.invaderConfig, rand, &invader_bullet_pool);
     // create game state
     // maybe we should also return the `validate` function here, to help remind the idiot behind the keyboard to actually invoke this function at some point
     var game_state = GameState.init(game_config, &player, &shield_mgr, &invader_mgr);
 
+    var game_state_2 = GameState.newGame();
+
     // attach game state to entities requiring it
 
     // TODO: Why not just create player with the bullet pool attached? (And invader manager ofc)
-    player.attach_bullet_pool(&player_bullet_pool);
     player.attachGameState(&game_state);
 
     shield_mgr.attachGameState(&game_state);
 
-    invader_mgr.attach_bullet_pool(&invader_bullet_pool);
     invader_mgr.attachGameState(&game_state);
 
     game_state.validate();
@@ -884,8 +956,22 @@ pub fn main() !void {
                 }
             },
             .game_loop => |gameState| {
-                gameState.update();
-                gameState.draw();
+                if (gameState.game_over) {
+                    gameOverScreen = GameOver.init(gameState.score);
+                    activeScreen = ActiveScreen{ .game_over = &gameOverScreen };
+                } else {
+                    gameState.update();
+                    gameState.draw();
+                }
+            },
+            .game_over => |game_over| {
+                game_over.update();
+                game_over.draw();
+                if (game_over.playAgain) {
+                    // Reset game here
+                    // Then switch back to start menu
+                    activeScreen = ActiveScreen{ .start_menu = &startMenu };
+                }
             },
         }
     }

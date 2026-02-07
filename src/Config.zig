@@ -1,5 +1,8 @@
 const rl = @import("raylib");
 
+pub const LARGE_FONT_SIZE = 80;
+pub const FONT_SIZE = 40;
+
 pub const Player = struct {
     width: f32,
     height: f32,
@@ -8,26 +11,15 @@ pub const Player = struct {
     speed: f32,
     fireDelay: u16,
 
-    pub fn init(width: f32, height: f32, startX: f32, startY: f32, speed: f32, fireDelay: u16) @This() {
-        return .{
-            .width = width,
-            .height = height,
-            .startX = startX,
-            .startY = startY,
-            .speed = speed,
-            .fireDelay = fireDelay,
-        };
-    }
-
     pub fn fromScreenDims(screenWidth: f32, screenHeight: f32, fireDelay: u16) @This() {
         const defaultSizeModifier = 1.0 / 50.0;
-        const width = screenWidth * defaultSizeModifier * 1 / 2;
+        const width = screenWidth * defaultSizeModifier * 2;
         return .{
             .width = width,
             .height = screenHeight * defaultSizeModifier,
             .startX = (screenWidth / 2.0) + (width / 2.0),
             .startY = screenHeight * (1.0 - defaultSizeModifier),
-            .speed = width,
+            .speed = 5,
             .fireDelay = fireDelay,
         };
     }
