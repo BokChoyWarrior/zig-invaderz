@@ -232,7 +232,7 @@ const Bullet = struct {
             .height = bullet_config.height,
             .speed = bullet_config.speed,
             .is_active = false,
-            .game_state_p = undefined,
+            .game_state_p = null,
             .direction = undefined,
             .velocity = undefined,
             .collides_with = bullet_config.collides_with,
@@ -279,6 +279,7 @@ const Bullet = struct {
                 const intersectingInvader = self.game_state_p.?.invader_manager_p.?.findIntersectingInvaderForBullet(self.rect());
                 if (intersectingInvader != null) {
                     intersectingInvader.?.*.kill();
+                    self.game_state_p.?.increase_score();
                     self.is_active = false;
                 }
             }
@@ -527,6 +528,7 @@ const InvaderManager = struct {
     rand: std.Random,
     move_delay: u16,
     move_timer: u16 = 0,
+    has_recently_descended: bool = false,
 
     // parent
     game_state_p: ?*GameState = null,
@@ -595,10 +597,6 @@ const InvaderManager = struct {
             }
         }
         self.bullet_pool_p.?.validate();
-
-        // for (&self.invaders_flat) |invader_p| {
-        //     invader_p.*.validate();
-        // }
     }
 
     pub fn draw(self: @This()) void {
@@ -610,23 +608,25 @@ const InvaderManager = struct {
         self.bullet_pool_p.?.draw();
     }
 
+    fn is_touching_edges(self: @This()) bool {
+        return self.group_x <= 0 or self.group_x >= @as(f32, @floatFromInt(rl.getScreenWidth())) - self.group_width;
+    }
+
     fn move(self: *@This()) void {
         var x_change: f32 = 0.0;
         var y_change: f32 = 0.0;
 
-        // check if group is touching screen edges, and if so, reverse direction and move down
-        if (self.group_x <= 0 or self.group_x >= @as(f32, @floatFromInt(rl.getScreenWidth())) - self.group_width) {
+        if (!self.is_touching_edges() or self.has_recently_descended) {
+            self.has_recently_descended = false;
+            x_change = (self.speed * @as(f32, @floatFromInt(@intFromEnum(self.direction_x))) * @as(f32, @floatFromInt(self.move_delay)));
+            // we must modify the x value before testing for screen edges, otherwise
+            self.group_x += x_change;
+        } else if (self.is_touching_edges()) {
             (self.direction_x) = @enumFromInt(@intFromEnum(self.direction_x) * -1);
-
             y_change = self.speed * @as(f32, @floatFromInt(self.move_delay));
+            self.group_y += y_change;
+            self.has_recently_descended = true;
         }
-
-        self.group_y += y_change;
-
-        x_change = (self.speed * @as(f32, @floatFromInt(@intFromEnum(self.direction_x))) * @as(f32, @floatFromInt(self.move_delay)));
-
-        // we must modify the x value before testing for screen edges, otherwise
-        self.group_x += x_change;
 
         var i: u8 = 0;
         while (self.getInvader(i)) |invader| : (i += 1) {
@@ -680,6 +680,7 @@ const GameState = struct {
     game_config: Config.Game,
     // entities needing access to game_state should also be added to the validate function (and if necessary implement a similar function of their own)
     player_p: ?*Player,
+    score: u32 = 0,
     shield_manager_p: ?*ShieldManager,
     invader_manager_p: ?*InvaderManager,
 
@@ -704,6 +705,7 @@ const GameState = struct {
     }
 
     pub fn draw(self: @This()) void {
+        self.drawScore();
         self.player_p.?.draw();
         self.shield_manager_p.?.draw();
         self.invader_manager_p.?.draw();
@@ -717,11 +719,20 @@ const GameState = struct {
         self.shield_manager_p.?.validate();
         self.invader_manager_p.?.validate();
     }
+
+    pub fn drawScore(self: @This()) void {
+        // std.debug.print("score: {}\n", .{self.score});
+        rl.drawText(rl.textFormat("Score: %d", .{self.score}), @divFloor(self.game_config.screenWidth, 2) - 50, 30, 40, rl.Color.white);
+    }
+
+    pub fn increase_score(self: *@This()) void {
+        self.score += 100;
+    }
 };
 
 const ActiveScreen = union(enum) {
-    start_menu: StartMenu,
-    game_loop: GameState,
+    start_menu: *StartMenu,
+    game_loop: *GameState,
 
     pub fn draw(self: @This()) void {
         switch (self) {
@@ -823,7 +834,7 @@ pub fn main() !void {
     rl.initWindow(screenWidth, screenHeight, "Zig Invaderz");
 
     const game_config = Config.Game.fromScreenDims(screenWidth, screenHeight);
-    const startMenu = StartMenu.init(game_config);
+    var startMenu = StartMenu.init(game_config);
 
     var player_bullet_pool = try BulletPool.initStateless(allocator, game_config.playerBulletPoolConfig);
     defer player_bullet_pool.deinit();
@@ -852,7 +863,7 @@ pub fn main() !void {
 
     game_state.validate();
 
-    var activeScreen = ActiveScreen{ .start_menu = startMenu };
+    var activeScreen = ActiveScreen{ .start_menu = &startMenu };
 
     defer rl.closeWindow();
     rl.setTargetFPS(60);
@@ -864,15 +875,15 @@ pub fn main() !void {
         rl.clearBackground(rl.Color.black);
 
         switch (activeScreen) {
-            .start_menu => |*menu| {
+            .start_menu => |menu| {
                 if (menu.startPressed) {
-                    activeScreen = ActiveScreen{ .game_loop = game_state };
+                    activeScreen = ActiveScreen{ .game_loop = &game_state };
                 } else {
                     menu.update();
                     menu.draw();
                 }
             },
-            .game_loop => |*gameState| {
+            .game_loop => |gameState| {
                 gameState.update();
                 gameState.draw();
             },

@@ -119,6 +119,20 @@ pub const BulletPool = struct {
     }
 };
 
+pub const Score = struct {
+    font_size: i32,
+    x: i32,
+    y: i32,
+
+    pub fn init() Score {
+        return .{
+            .font_size = 10,
+            .x = 10,
+            .y = 10,
+        };
+    }
+};
+
 pub const Game = struct {
     screenWidth: i32,
     screenHeight: i32,
@@ -133,7 +147,7 @@ pub const Game = struct {
         return .{
             .screenWidth = screenWidth,
             .screenHeight = screenHeight,
-            .playerConfig = Player.fromScreenDims(screenWidthF, screenHeightF, 60),
+            .playerConfig = Player.fromScreenDims(screenWidthF, screenHeightF, 20),
             .playerBulletPoolConfig = BulletPool.init(10, Bullet.fromScreenDims(screenWidthF, .{ .invaders = true, .shield = true })),
             .shieldConfig = Shield.fromScreenDims(screenWidthF),
             .invaderConfig = Invader.fromScreenDims(screenWidthF),
