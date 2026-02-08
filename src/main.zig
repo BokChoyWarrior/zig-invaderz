@@ -69,26 +69,33 @@ const Player = struct {
     // parents
     game_state_p: ?*GameState,
     // children
-    bullet_pool_p: *BulletPool,
+    bullet_pool_p: BulletPool,
 
     pub const Options = struct {
         width: f32 = 50,
         height: f32 = 60,
         speed: f32 = 5,
         fire_delay: u16 = 20,
-        texture: rl.Texture2D,
     };
 
-    pub fn initStateless(options: Options, bullet_pool_p: *BulletPool) @This() {
+    pub fn initStateless(allocator: Allocator, options: Options) !@This() {
+        const player_bullet_pool = try BulletPool.initStateless(allocator, .{
+            .bullet_options = .{
+                .collides_with = .{ .shield = true, .invaders = true },
+            },
+        });
+
+        const texture = try rl.Texture2D.init("/home/harv/dev/zig/zig-invaders/src/images/cat-girl.png");
+
         return .{
             .width = options.width,
             .height = options.height,
             .speed = options.speed,
             .fire_delay = options.fire_delay,
-            .texture = options.texture,
+            .texture = texture,
             .pos_x = @as(f32, @floatFromInt(rl.getScreenWidth())) / 2.0,
             .pos_y = @as(f32, @floatFromInt(rl.getScreenHeight())) - options.height,
-            .bullet_pool_p = bullet_pool_p,
+            .bullet_pool_p = player_bullet_pool,
             .game_state_p = null,
         };
     }
@@ -301,7 +308,7 @@ const Bullet = struct {
             }
 
             if (self.collides_with.shield) {
-                const intersectingShield = self.game_state_p.?.shield_manager_p.?.findIntersectingShieldForBullet(self.rect());
+                const intersectingShield = self.game_state_p.?.shield_manager_p.findIntersectingShieldForBullet(self.rect());
                 if (intersectingShield != null) {
                     intersectingShield.?.takeDamage();
                     self.is_active = false;
@@ -309,7 +316,7 @@ const Bullet = struct {
             }
 
             if (self.collides_with.invaders) {
-                const intersectingInvader = self.game_state_p.?.invader_manager_p.?.findIntersectingInvaderForBullet(self.rect());
+                const intersectingInvader = self.game_state_p.?.invader_manager_p.findIntersectingInvaderForBullet(self.rect());
                 if (intersectingInvader != null) {
                     intersectingInvader.?.*.kill();
                     self.game_state_p.?.increase_score();
@@ -319,7 +326,7 @@ const Bullet = struct {
 
             if (self.collides_with.player) {
                 // TODO
-                if (self.rect().intersects(self.game_state_p.?.player_p.?.rect())) {
+                if (self.rect().intersects(self.game_state_p.?.player_p.rect())) {
                     self.game_state_p.?.kill_player();
                 }
             }
@@ -361,7 +368,7 @@ const Shield = struct {
     texture: rl.Texture2D,
     game_state_p: ?*GameState,
 
-    pub fn initStateless(options: ShieldManager.Options, x: f32, y: f32) @This() {
+    pub fn initStateless(options: ShieldManager.Options, x: f32, y: f32, texture: rl.Texture2D) @This() {
         return .{
             .pos_x = x,
             .pos_y = y,
@@ -370,7 +377,7 @@ const Shield = struct {
             .health = options.max_health,
             .max_health = options.max_health,
             .colour = options.colour,
-            .texture = options.texture,
+            .texture = texture,
             .game_state_p = null,
         };
     }
@@ -443,10 +450,11 @@ const ShieldManager = struct {
         max_health: u8 = 10,
         spacing_factor: f32 = 2.0,
         colour: rl.Color = rl.Color.white,
-        texture: rl.Texture2D,
     };
 
-    pub fn initStateless(options: Options) @This() {
+    pub fn initStateless(options: Options) !@This() {
+        const texture = try rl.Texture2D.init("/home/harv/dev/zig/zig-invaders/src/images/shield_girl.png");
+
         const group_width = (options.width * NUM_SHIELDS) + ((options.width * options.spacing_factor) * (NUM_SHIELDS - 1));
         const group_height = options.height;
 
@@ -461,6 +469,7 @@ const ShieldManager = struct {
                 options,
                 group_x + (@as(f32, @floatFromInt(i)) * ((options.spacing_factor + 1) * options.width)),
                 group_y - (options.height / 2.0),
+                texture,
             );
         }
 
@@ -470,7 +479,7 @@ const ShieldManager = struct {
             .group_x = group_x,
             .group_width = group_width,
             .group_height = group_height,
-            .texture = options.texture,
+            .texture = texture,
             .options = options,
             .game_state_p = null,
         };
@@ -610,7 +619,7 @@ const InvaderManager = struct {
     game_state_p: ?*GameState = null,
     // children
     invaders: [INVADERS_ROWS][INVADERS_COLS]Invader,
-    bullet_pool_p: *BulletPool,
+    bullet_pool_p: BulletPool,
     // invaders_flat: [NUM_INVADERS_X * NUM_INVADERS_Y]*Invader,
 
     pub const Options = struct {
@@ -621,7 +630,7 @@ const InvaderManager = struct {
         invader: Invader.Options = .{},
     };
 
-    pub fn initStateless(rand: std.Random, options: Options, invader_bullet_pool_p: *BulletPool) @This() {
+    pub fn initStateless(allocator: Allocator, rand: std.Random, options: Options) !@This() {
         // num invaders heights (width*n) + inbetween spaces heights (width*(n-1))
         const group_width = options.invader.width * ((options.spacing * INVADERS_COLS) - 1);
         const group_height = options.invader.height * options.spacing * (INVADERS_ROWS - 1);
@@ -648,6 +657,15 @@ const InvaderManager = struct {
             }
         }
 
+        const invader_bullet_pool = try BulletPool.initStateless(
+            allocator,
+            .{
+                .bullet_options = .{
+                    .collides_with = .{ .shield = true, .player = true },
+                },
+            },
+        );
+
         return .{
             .options = options,
             .spacing = options.spacing,
@@ -660,7 +678,7 @@ const InvaderManager = struct {
             .group_y = group_y,
             .rand = rand,
             .move_delay = options.move_delay,
-            .bullet_pool_p = invader_bullet_pool_p,
+            .bullet_pool_p = invader_bullet_pool,
         };
     }
 
@@ -780,56 +798,68 @@ const GameState = struct {
     score: u32 = 0,
     game_over: bool = false, // could make this an enum later: playing, dead, survived etc?
     // entities needing access to game_state should also be added to the validate function (and if necessary implement a similar function of their own)
-    player_p: ?*Player,
-    shield_manager_p: ?*ShieldManager,
-    invader_manager_p: ?*InvaderManager,
+    player_p: Player,
+    shield_manager_p: ShieldManager,
+    invader_manager_p: InvaderManager,
 
     pub const Options = struct {
         screenWidth: i32 = 1280,
         screenHeight: i32 = 720,
+        shields_opt: ShieldManager.Options = .{},
+        invader_opt: InvaderManager.Options = .{},
+        player_opt: Player.Options = .{},
     };
 
-    pub fn init(options: Options, player_p: *Player, shield_manager_p: *ShieldManager, invader_manager_p: *InvaderManager) @This() {
+    pub fn init(allocator: Allocator, rand: std.Random, options: Options) !@This() {
+        const shield_mgr = try ShieldManager.initStateless(options.shields_opt);
+
+        const invader_mgr = try InvaderManager.initStateless(allocator, rand, options.invader_opt);
+
+        const player: Player = try Player.initStateless(allocator, options.player_opt);
+
         return .{
             .options = options,
-            .player_p = player_p,
-            .shield_manager_p = shield_manager_p,
-            .invader_manager_p = invader_manager_p,
+            .shield_manager_p = shield_mgr,
+            .player_p = player,
+            .invader_manager_p = invader_mgr,
         };
     }
 
+    pub fn attachSelfToEntities(self: *GameState) void {
+        self.shield_manager_p.attachGameState(self);
+        self.invader_manager_p.attachGameState(self);
+        self.player_p.attachGameState(self);
+    }
+
     pub fn deinit(self: *@This()) void {
-        self.invader_manager_p.?.deinit();
-        self.player_p.?.deinit();
+        self.invader_manager_p.deinit();
+        self.player_p.deinit();
     }
 
     pub fn update(self: *@This()) void {
-        self.invader_manager_p.?.update();
-        self.player_p.?.update();
+        self.invader_manager_p.update();
+        self.player_p.update();
     }
 
     pub fn draw(self: *@This()) void {
-        self.player_p.?.draw();
+        self.player_p.draw();
         self.drawScore();
-        self.shield_manager_p.?.draw();
-        self.invader_manager_p.?.draw();
+        self.shield_manager_p.draw();
+        self.invader_manager_p.draw();
     }
 
-    pub fn validate(self: @This()) void {
-        assert(self.invader_manager_p != null);
-        assert(self.shield_manager_p != null);
-        assert(self.player_p != null);
-        self.invader_manager_p.?.validate();
-        self.shield_manager_p.?.validate();
-        self.player_p.?.validate();
+    pub fn validate(self: *@This()) void {
+        self.invader_manager_p.validate();
+        self.shield_manager_p.validate();
+        self.player_p.validate();
     }
 
     pub fn reset(self: *@This()) void {
         self.score = 0;
         self.game_over = false;
-        self.invader_manager_p.?.reset();
-        self.player_p.?.reset();
-        self.shield_manager_p.?.reset();
+        self.invader_manager_p.reset();
+        self.player_p.reset();
+        self.shield_manager_p.reset();
     }
 
     pub fn drawScore(self: @This()) void {
@@ -1025,37 +1055,9 @@ pub fn main() !void {
 
     var startMenu = StartMenu.init();
     var gameOverScreen: GameOver = undefined;
-
-    var player_bullet_pool = try BulletPool.initStateless(allocator, .{
-        .bullet_options = .{
-            .collides_with = .{ .shield = true, .invaders = true },
-        },
-    });
-    defer player_bullet_pool.deinit();
-    const playerTexture = try rl.Texture2D.init("/home/harv/dev/zig/zig-invaders/src/images/cat-girl.png");
-    var player: Player = Player.initStateless(.{ .texture = playerTexture }, &player_bullet_pool);
-
-    const shieldTex = try rl.Texture2D.init("/home/harv/dev/zig/zig-invaders/src/images/shield_girl.png");
-    var shield_mgr = ShieldManager.initStateless(.{ .texture = shieldTex });
-
-    var invader_bullet_pool = try BulletPool.initStateless(
-        allocator,
-        .{
-            .bullet_options = .{
-                .collides_with = .{ .shield = true, .player = true },
-            },
-        },
-    );
-    defer invader_bullet_pool.deinit();
-
-    var invader_mgr = InvaderManager.initStateless(rand, .{}, &invader_bullet_pool);
-    // create game state
-    // maybe we should also return the `validate` function here, to help remind the idiot behind the keyboard to actually invoke this function at some point
-    var game_state = GameState.init(.{}, &player, &shield_mgr, &invader_mgr);
-
-    player.attachGameState(&game_state);
-    shield_mgr.attachGameState(&game_state);
-    invader_mgr.attachGameState(&game_state);
+    var game_state = try GameState.init(allocator, rand, .{});
+    defer game_state.deinit();
+    game_state.attachSelfToEntities();
     game_state.validate();
 
     var activeScreen = ActiveScreen{ .start_menu = &startMenu };
