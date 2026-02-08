@@ -1053,19 +1053,24 @@ pub fn main() !void {
     const screenHeight = 760;
     rl.initWindow(screenWidth, screenHeight, "Zig Invaderz");
 
+    // Get all screens ready
     var startMenu = StartMenu.init();
-    var gameOverScreen: GameOver = undefined;
+
     var game_state = try GameState.init(allocator, rand, .{});
     defer game_state.deinit();
     game_state.attachSelfToEntities();
     game_state.validate();
 
+    var gameOverScreen: GameOver = undefined;
+
+    // Set active screen to display first
     var activeScreen = ActiveScreen{ .start_menu = &startMenu };
 
     defer rl.closeWindow();
     rl.setTargetFPS(60);
 
-    // window loop
+    // game / window loop
+    // When the active screen is game_state, game_state.update() and .draw() will be called each loop.
     while (!rl.windowShouldClose()) {
         rl.beginDrawing();
         defer rl.endDrawing();
