@@ -3,6 +3,7 @@ const zig_invaders = @import("zig_invaders");
 const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
 const Config = @import("./Config.zig"); // Import the config
+const MoveFns = @import("./movement_funcs.zig"); // Import the config
 const assert = std.debug.assert;
 
 const Rect = struct {
@@ -23,7 +24,7 @@ const Rect = struct {
     }
 };
 
-const Vec2 = struct {
+pub const Vec2 = struct {
     x: f32,
     y: f32,
 
@@ -82,6 +83,7 @@ const Player = struct {
         const player_bullet_pool = try BulletPool.initStateless(allocator, .{
             .bullet_options = .{
                 .collides_with = .{ .shield = true, .invaders = true },
+                .velocity_function = MoveFns.upwardsLinear,
             },
         });
 
@@ -160,8 +162,7 @@ const Player = struct {
             // Let bullet pool know where to fire from
             const bullet_start_x = self.pos_x + (self.width / 2.0);
             const bullet_start_y = self.pos_y;
-            const direction = Vec2.init(0.0, -1.0);
-            self.bullet_pool_p.fire_bullet(bullet_start_x, bullet_start_y, direction);
+            self.bullet_pool_p.fire_bullet(bullet_start_x, bullet_start_y);
         }
         self.fire_timer += 1;
     }
@@ -229,10 +230,10 @@ const BulletPool = struct {
         }
     }
 
-    pub fn fire_bullet(self: *@This(), emitter_x: f32, emitter_y: f32, direction: Vec2) void {
+    pub fn fire_bullet(self: *@This(), emitter_x: f32, emitter_y: f32) void {
         for (self.bullets) |*bullet| {
             if (!bullet.is_active) {
-                bullet.fire(emitter_x, emitter_y, direction);
+                bullet.fire(emitter_x, emitter_y);
                 break;
             }
         }
@@ -246,14 +247,17 @@ const BulletPool = struct {
 const Bullet = struct {
     width: f32,
     height: f32,
-    speed: f32,
-    direction: Vec2,
+    colour: rl.Color,
     collides_with: Config.CollidesWith,
+    velocity_fn: *const fn (u32) Vec2,
+    damage: u16,
 
     velocity: Vec2,
-    pos_x: f32,
-    pos_y: f32,
-    is_active: bool,
+    pos_x: f32 = 0.0,
+    pos_y: f32 = 0.0,
+    is_active: bool = false,
+    time_alive: u32 = 0,
+
     // parents
     game_state_p: ?*GameState = null,
 
@@ -261,20 +265,21 @@ const Bullet = struct {
         width: f32 = 5.0,
         height: f32 = 5.0,
         speed: f32 = 10.0,
+        damage: u16 = 1,
+        colour: rl.Color = rl.Color.yellow,
         collides_with: Config.CollidesWith = .{},
+        velocity_function: *const fn (u32) Vec2 = &MoveFns.downwardsLinear,
     };
 
     pub fn initStateless(options: Options) @This() {
         return .{
             .width = options.width,
             .height = options.height,
-            .speed = options.speed,
+            .colour = options.colour,
+            .damage = options.damage,
             .collides_with = options.collides_with,
-            .pos_x = 0,
-            .pos_y = 0,
-            .is_active = false,
-            .direction = undefined,
-            .velocity = undefined,
+            .velocity = Vec2.init(0.0, 0.0),
+            .velocity_fn = options.velocity_function,
             .game_state_p = null,
         };
     }
@@ -290,15 +295,17 @@ const Bullet = struct {
                 @intFromFloat(self.pos_y),
                 @intFromFloat(self.width),
                 @intFromFloat(self.height),
-                rl.Color.yellow,
+                self.colour,
             );
         }
     }
 
     pub fn update(self: *@This()) void {
         if (self.is_active) {
-            self.*.pos_x += self.velocity.x;
-            self.*.pos_y += self.velocity.y;
+            const velocity = self.velocity_fn(self.time_alive);
+            self.pos_x += velocity.x;
+            self.pos_y += velocity.y;
+            self.time_alive += 1;
 
             // TODO: Generalise check for out of bounds
             const screenWidthF = @as(f32, @floatFromInt(rl.getScreenWidth()));
@@ -308,38 +315,38 @@ const Bullet = struct {
             }
 
             if (self.collides_with.shield) {
-                const intersectingShield = self.game_state_p.?.shield_manager_p.findIntersectingShieldForBullet(self.rect());
+                const intersectingShield = self.game_state_p.?.shield_manager.findIntersectingShieldForBullet(self.rect());
                 if (intersectingShield != null) {
-                    intersectingShield.?.takeDamage();
+                    intersectingShield.?.takeDamage(self.damage);
                     self.is_active = false;
                 }
             }
 
             if (self.collides_with.invaders) {
-                const intersectingInvader = self.game_state_p.?.invader_manager_p.findIntersectingInvaderForBullet(self.rect());
+                const intersectingInvader = self.game_state_p.?.invader_manager.findIntersectingInvaderForBullet(self.rect());
                 if (intersectingInvader != null) {
-                    intersectingInvader.?.*.kill();
-                    self.game_state_p.?.increase_score();
+                    intersectingInvader.?.*.takeDamage(self.damage);
+                    self.is_active = false;
+                }
+                const intersectsSuperI = self.game_state_p.?.super_invader.is_active and self.rect().intersects(self.game_state_p.?.super_invader.rect());
+                if (intersectsSuperI) {
+                    self.game_state_p.?.super_invader.takeDamage(self.damage);
                     self.is_active = false;
                 }
             }
 
             if (self.collides_with.player) {
-                // TODO
-                if (self.rect().intersects(self.game_state_p.?.player_p.rect())) {
+                if (self.rect().intersects(self.game_state_p.?.player.rect())) {
                     self.game_state_p.?.kill_player();
                 }
             }
         }
     }
 
-    pub fn fire(self: *@This(), emitter_x: f32, emitter_y: f32, direction: Vec2) void {
+    pub fn fire(self: *@This(), emitter_x: f32, emitter_y: f32) void {
         // correct position based on bullet dimensions
         self.pos_x = emitter_x - (self.width / 2);
         self.pos_y = emitter_y + (self.height / 2);
-        const unit_direction = direction.normalised();
-        self.direction = unit_direction;
-        self.velocity = unit_direction.scale(self.speed);
         self.is_active = true;
     }
 
@@ -362,8 +369,8 @@ const Shield = struct {
     pos_y: f32,
     width: f32,
     height: f32,
-    health: u8,
-    max_health: u8,
+    health: u16,
+    max_health: u16,
     colour: rl.Color,
     texture: rl.Texture2D,
     game_state_p: ?*GameState,
@@ -422,8 +429,11 @@ const Shield = struct {
         self.game_state_p = game_state_p;
     }
 
-    pub fn takeDamage(self: *@This()) void {
-        self.health -= 1;
+    pub fn takeDamage(self: *@This(), damage: u16) void {
+        self.health -= damage;
+        // clamp to 0
+        if (self.health < 0) self.health = 0;
+        // update the alpha of the shield based on health (0-100% health -> 0-255 alpha
         self.updateColourAlpha();
     }
 
@@ -587,8 +597,10 @@ const Invader = struct {
         self.game_state_p = game_state_p;
     }
 
-    pub fn kill(self: *@This()) void {
+    pub fn takeDamage(self: *@This(), damage: u16) void {
+        _ = damage;
         self.is_alive = false;
+        self.game_state_p.?.increase_score(100);
     }
 
     pub fn reset(self: *@This()) void {
@@ -619,12 +631,12 @@ const InvaderManager = struct {
     game_state_p: ?*GameState = null,
     // children
     invaders: [INVADERS_ROWS][INVADERS_COLS]Invader,
-    bullet_pool_p: BulletPool,
+    bullet_pool: BulletPool,
     // invaders_flat: [NUM_INVADERS_X * NUM_INVADERS_Y]*Invader,
 
     pub const Options = struct {
         move_delay: u16 = 30,
-        speed: f32 = 1.0,
+        speed: f32 = 0.5,
         spacing: f32 = 2.5,
         bullet_pool: BulletPool.Options = .{},
         invader: Invader.Options = .{},
@@ -662,6 +674,7 @@ const InvaderManager = struct {
             .{
                 .bullet_options = .{
                     .collides_with = .{ .shield = true, .player = true },
+                    .velocity_function = MoveFns.downwardsLinear,
                 },
             },
         );
@@ -678,12 +691,12 @@ const InvaderManager = struct {
             .group_y = group_y,
             .rand = rand,
             .move_delay = options.move_delay,
-            .bullet_pool_p = invader_bullet_pool,
+            .bullet_pool = invader_bullet_pool,
         };
     }
 
     pub fn deinit(self: *@This()) void {
-        self.bullet_pool_p.deinit();
+        self.bullet_pool.deinit();
     }
 
     pub fn reset(self: *@This()) void {
@@ -691,7 +704,7 @@ const InvaderManager = struct {
         self.group_y = 50.0;
         self.direction_x = .right;
         self.move_timer = 0;
-        self.bullet_pool_p.reset();
+        self.bullet_pool.reset();
         for (&self.invaders) |*row| {
             for (row) |*invader| {
                 invader.reset();
@@ -705,7 +718,7 @@ const InvaderManager = struct {
                 invader.attachGameState(game_state_p);
             }
         }
-        self.bullet_pool_p.attachGameState(game_state_p);
+        self.bullet_pool.attachGameState(game_state_p);
     }
 
     pub fn validate(self: *@This()) void {
@@ -715,7 +728,7 @@ const InvaderManager = struct {
                 invader.validate();
             }
         }
-        self.bullet_pool_p.validate();
+        self.bullet_pool.validate();
     }
 
     pub fn draw(self: @This()) void {
@@ -724,7 +737,7 @@ const InvaderManager = struct {
                 invader.draw();
             }
         }
-        self.bullet_pool_p.draw();
+        self.bullet_pool.draw();
     }
 
     fn is_touching_edges(self: @This()) bool {
@@ -760,7 +773,7 @@ const InvaderManager = struct {
             if (invader.is_alive and self.rand.intRangeAtMost(u16, 0, 5000) < 5) {
                 const x = invader.pos_x + (invader.width / 2.0);
                 const y = invader.pos_y + invader.height;
-                self.bullet_pool_p.fire_bullet(x, y, Vec2.init(0.0, 1.0));
+                self.bullet_pool.fire_bullet(x, y);
             }
         }
     }
@@ -771,7 +784,7 @@ const InvaderManager = struct {
         }
         self.move_timer += 1;
         self.randomly_fire();
-        self.bullet_pool_p.update();
+        self.bullet_pool.update();
     }
 
     // generic rect, maybe we want to add bombs or other projectiles later
@@ -793,14 +806,170 @@ const InvaderManager = struct {
     }
 };
 
+const SuperInvader = struct {
+    pos_x: f32,
+    pos_y: f32,
+    width: f32,
+    height: f32,
+    speed: f32,
+    max_health: u16,
+    bomb_delay: u16,
+    health: u16 = 0,
+    is_active: bool = false,
+    bomb_timer: u16 = 0,
+    bomb_pool: BulletPool,
+    allocator: Allocator,
+    rand: std.Random,
+    game_state_p: ?*GameState,
+
+    pub const Options = struct {
+        width: f32 = 50,
+        height: f32 = 20,
+        speed: f32 = 0.75,
+        bomb_delay: u16 = 30,
+        max_health: u16 = 5,
+    };
+
+    pub fn initStateless(allocator: Allocator, rand: std.Random, options: Options) !@This() {
+        const bomb_pool = try BulletPool.initStateless(
+            allocator,
+            .{
+                .bullet_options = .{
+                    .collides_with = .{ .shield = true, .player = true },
+                    .height = 15,
+                    .width = 15,
+                    .speed = 15,
+                    .colour = rl.Color.dark_green,
+                    .velocity_function = MoveFns.downwardsSwerving,
+                },
+            },
+        );
+        return .{
+            .pos_x = -options.width,
+            .pos_y = 20.0,
+            .width = options.width,
+            .height = options.height,
+            .speed = options.speed,
+            .max_health = options.max_health,
+            .health = options.max_health,
+            .bomb_delay = options.bomb_delay,
+            .bomb_pool = bomb_pool,
+            .allocator = allocator,
+            .rand = rand,
+            .game_state_p = null,
+        };
+    }
+
+    pub fn validate(self: @This()) void {
+        assert(self.game_state_p != null);
+    }
+
+    pub fn rect(self: @This()) Rect {
+        return Rect{
+            .x = self.pos_x,
+            .y = self.pos_y,
+            .width = self.width,
+            .height = self.height,
+        };
+    }
+
+    pub fn draw(self: @This()) void {
+        if (self.is_active) {
+            rl.drawRectangle(
+                @intFromFloat(self.pos_x),
+                @intFromFloat(self.pos_y),
+                @intFromFloat(self.width),
+                @intFromFloat(self.height),
+                rl.Color.red,
+            );
+            const healthText = rl.textFormat("%d", .{self.health});
+            const textWidth = rl.measureText(healthText, @intFromFloat(self.height));
+            const text_x = self.pos_x + (self.width / 2.0) - @as(f32, @floatFromInt(textWidth)) / 2.0;
+            rl.drawText(healthText, @intFromFloat(text_x), @intFromFloat(self.pos_y), @intFromFloat(self.height), rl.Color.white);
+        }
+        self.bomb_pool.draw();
+    }
+
+    pub fn attachGameState(self: *@This(), game_state_p: *GameState) void {
+        self.game_state_p = game_state_p;
+        self.bomb_pool.attachGameState(game_state_p);
+    }
+
+    pub fn activate(self: *@This()) void {
+        self.is_active = true;
+        self.pos_x = -self.width;
+        self.pos_y = 20.0;
+        self.bomb_timer = 0;
+        self.health = self.max_health;
+    }
+
+    pub fn reset(self: *@This()) void {
+        self.activate();
+        self.deactivate();
+        self.bomb_pool.reset();
+    }
+
+    pub fn deactivate(self: *@This()) void {
+        self.is_active = false;
+    }
+
+    pub fn update(self: *@This()) void {
+        self.activateByChance();
+
+        if (self.is_active) {
+            self.pos_x += self.speed;
+
+            if (self.pos_x > @as(f32, @floatFromInt(rl.getScreenWidth()))) {
+                self.deactivate();
+                return;
+            }
+
+            // Drop bombs occasionally
+            self.bomb_timer += 1;
+            if (self.bomb_timer >= self.bomb_delay) {
+                self.maybeDropBomb();
+                self.bomb_timer = 0;
+            }
+        }
+        self.bomb_pool.update();
+    }
+
+    pub fn activateByChance(self: *@This()) void {
+        if (!self.is_active and self.rand.intRangeAtMost(u16, 0, 500) == 0) {
+            self.activate();
+        }
+    }
+
+    fn maybeDropBomb(self: *@This()) void {
+        if (self.rand.intRangeAtMost(u16, 0, 10) == 1) {
+            const bomb_x = self.pos_x + (self.width / 2.0);
+            const bomb_y = self.pos_y + self.height;
+            self.bomb_pool.fire_bullet(bomb_x, bomb_y);
+        }
+    }
+
+    pub fn takeDamage(self: *@This(), damage: u16) void {
+        self.health -= damage;
+        if (self.health <= 0) {
+            self.deactivate();
+            self.game_state_p.?.increase_score(500);
+        }
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.bomb_pool.deinit();
+    }
+};
+
 const GameState = struct {
     options: Options,
     score: u32 = 0,
     game_over: bool = false, // could make this an enum later: playing, dead, survived etc?
     // entities needing access to game_state should also be added to the validate function (and if necessary implement a similar function of their own)
-    player_p: Player,
-    shield_manager_p: ShieldManager,
-    invader_manager_p: InvaderManager,
+    player: Player,
+    shield_manager: ShieldManager,
+    invader_manager: InvaderManager,
+    super_invader: SuperInvader,
 
     pub const Options = struct {
         screenWidth: i32 = 1280,
@@ -808,58 +977,66 @@ const GameState = struct {
         shields_opt: ShieldManager.Options = .{},
         invader_opt: InvaderManager.Options = .{},
         player_opt: Player.Options = .{},
+        super_invader_opt: SuperInvader.Options = .{},
     };
 
     pub fn init(allocator: Allocator, rand: std.Random, options: Options) !@This() {
         const shield_mgr = try ShieldManager.initStateless(options.shields_opt);
-
         const invader_mgr = try InvaderManager.initStateless(allocator, rand, options.invader_opt);
-
         const player: Player = try Player.initStateless(allocator, options.player_opt);
+        const super_invader = try SuperInvader.initStateless(allocator, rand, options.super_invader_opt);
 
         return .{
             .options = options,
-            .shield_manager_p = shield_mgr,
-            .player_p = player,
-            .invader_manager_p = invader_mgr,
+            .shield_manager = shield_mgr,
+            .player = player,
+            .invader_manager = invader_mgr,
+            .super_invader = super_invader,
         };
     }
 
     pub fn attachSelfToEntities(self: *GameState) void {
-        self.shield_manager_p.attachGameState(self);
-        self.invader_manager_p.attachGameState(self);
-        self.player_p.attachGameState(self);
+        self.shield_manager.attachGameState(self);
+        self.invader_manager.attachGameState(self);
+        self.player.attachGameState(self);
+        self.super_invader.attachGameState(self);
     }
 
     pub fn deinit(self: *@This()) void {
-        self.invader_manager_p.deinit();
-        self.player_p.deinit();
+        self.invader_manager.deinit();
+        self.player.deinit();
+        self.super_invader.deinit();
     }
 
     pub fn update(self: *@This()) void {
-        self.invader_manager_p.update();
-        self.player_p.update();
+        self.invader_manager.update();
+        self.player.update();
+        self.super_invader.update();
+        // self.shield_manager.update();
     }
 
     pub fn draw(self: *@This()) void {
-        self.player_p.draw();
+        self.player.draw();
         self.drawScore();
-        self.shield_manager_p.draw();
-        self.invader_manager_p.draw();
+        self.shield_manager.draw();
+        self.invader_manager.draw();
+        self.super_invader.draw();
     }
 
     pub fn validate(self: *@This()) void {
-        self.invader_manager_p.validate();
-        self.shield_manager_p.validate();
-        self.player_p.validate();
+        self.invader_manager.validate();
+        self.shield_manager.validate();
+        self.player.validate();
+        self.super_invader.validate();
     }
 
     pub fn reset(self: *@This()) void {
         self.score = 0;
         self.game_over = false;
-        self.invader_manager_p.reset();
-        self.player_p.reset();
-        self.shield_manager_p.reset();
+        self.invader_manager.reset();
+        self.player.reset();
+        self.shield_manager.reset();
+        self.super_invader.reset();
     }
 
     pub fn drawScore(self: @This()) void {
@@ -867,8 +1044,8 @@ const GameState = struct {
         rl.drawText(rl.textFormat("Score: %d", .{self.score}), 50, rl.getScreenHeight() - 80, 40, rl.Color.white);
     }
 
-    pub fn increase_score(self: *@This()) void {
-        self.score += 100;
+    pub fn increase_score(self: *@This(), amount: u32) void {
+        self.score += amount;
     }
 
     pub fn kill_player(self: *@This()) void {
